@@ -183,9 +183,9 @@ def find_nearest_prime_around(n):
             return n + offset
         offset += 1
 
-# State Table
+# === State Table ===
 class StateTable:
-    def __init__(self)
+    def __init__(self):
         self.table = [
             [1, 2, 0, 0], [3, 5, 1, 0], [4, 6, 0, 1], [7, 10, 2, 0],
             [8, 12, 1, 1], [9, 13, 1, 1], [11, 14, 0, 2], [15, 19, 3, 0],
