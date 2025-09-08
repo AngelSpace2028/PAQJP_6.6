@@ -251,6 +251,7 @@ class StateTable:
             [140, 252, 0, 40], [249, 135, 41, 0], [250, 69, 40, 1], [80, 251, 1, 40],
             [140, 252, 0, 41]
         ]
+          
 
 # PAQ Compression Fallback Implementation
 class PAQCompressor:
@@ -969,7 +970,7 @@ class PAQJPCompressor:
         if not data:
             logging.warning("transform_13: Empty input, returning empty bytes")
             return b''
-        if not self.state_table.table:
+        if not hasattr(self.state_table, 'table') or not self.state_table.table:
             logging.warning("transform_13: State table is empty, returning original data")
             return data
         transformed = bytearray(data)
@@ -994,7 +995,7 @@ class PAQJPCompressor:
         if not data:
             logging.warning("reverse_transform_13: Empty input, returning empty bytes")
             return b''
-        if not self.state_table.table:
+        if not hasattr(self.state_table, 'table') or not self.state_table.table:
             logging.warning("reverse_transform_13: State table is empty, returning original data")
             return data
         transformed = bytearray(data)
@@ -1049,7 +1050,7 @@ class PAQJPCompressor:
             iteration_count += 1
             if not modified or len(''.join(output_bits)) // 8 >= 32:
                 break
-        if len(output_bits) >= 4 and self.state_table.table:
+        if len(output_bits) >= 4 and hasattr(self.state_table, 'table') and self.state_table.table:
             i = 0
             while i < len(output_bits) - 4:
                 pattern_4 = ''.join(output_bits[i:i+4])
@@ -1088,7 +1089,7 @@ class PAQJPCompressor:
         prime_index = (len(data) + 1) % len(self.PRIMES)
         xor_bit = '1' if self.PRIMES[prime_index] % 2 == 0 else '0'
         output_bits = list(binary_str)
-        if len(output_bits) >= 4 and self.state_table.table:
+        if len(output_bits) >= 4 and hasattr(self.state_table, 'table') and self.state_table.table:
             i = 0
             while i < len(output_bits) - 4:
                 pattern_4 = ''.join(output_bits[i:i+4])
