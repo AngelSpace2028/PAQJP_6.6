@@ -99,6 +99,7 @@ def generate_pi_digits(num_digits: int = 3, filename: str = PI_DIGITS_FILE) -> L
     if loaded_digits is not None:
         return loaded_digits
     try:
+        # Requires mpmath: pip install mpmath (optional)
         from mpmath import mp
         mp.dps = num_digits
         pi_digits = [int(d) for d in mp.pi.digits(10)[0]]
@@ -252,6 +253,7 @@ class StateTable:
             [140, 252, 0, 40], [249, 135, 41, 0], [250, 69, 40, 1], [80, 251, 1, 40],
             [140, 252, 0, 41]
         ]
+
 # === Smart Compressor ===
 class SmartCompressor:
     def __init__(self):
@@ -1077,7 +1079,7 @@ class PAQJPCompressor:
         return bytes(transformed)
 
     def transform_14(self, data, repeat=255):
-        """Transform data by processing '10...10xx' to 'xx10...10', '01', and '0000'/'1111' patterns."""
+        """Transform data by processing '01' and '0000'/'1111' patterns."""
         if not data:
             logging.warning("transform_14: Empty input, returning minimal output")
             return struct.pack('B', 0)
@@ -1097,39 +1099,9 @@ class PAQJPCompressor:
         prime_index = len(data) % len(self.PRIMES)
         xor_bit = '1' if self.PRIMES[prime_index] % 2 == 0 else '0'
         
+        # Process "01" patterns
         output_bits = list(binary_str)
         iteration_count = 0
-        
-        # Process "10...10xx" to "xx10...10" patterns
-        for _ in range(max_cycles):
-            temp_bits = []
-            i = 0
-            modified = False
-            while i < len(output_bits):
-                # Look for 1010...10xx (at least two '10' pairs followed by xx)
-                if i + 6 <= len(output_bits) and output_bits[i:i+4] == ['1', '0', '1', '0']:
-                    j = i + 4
-                    while j + 2 <= len(output_bits) and output_bits[j:j+2] == ['1', '0']:
-                        j += 2
-                    if j + 2 <= len(output_bits):  # Found xx
-                        xx = output_bits[j:j+2]
-                        pattern = output_bits[i:j]
-                        temp_bits.extend(xx + pattern)  # Move xx to start
-                        logging.info(f"transform_14: Transformed {''.join(pattern + xx)} to {''.join(xx + pattern)} at position {i}")
-                        i = j + 2
-                        modified = True
-                    else:
-                        temp_bits.append(output_bits[i])
-                        i += 1
-                else:
-                    temp_bits.append(output_bits[i])
-                    i += 1
-            output_bits = temp_bits
-            iteration_count += 1
-            if not modified:
-                break
-        
-        # Process "01" patterns
         for _ in range(max_cycles):
             temp_bits = []
             i = 0
@@ -1150,7 +1122,7 @@ class PAQJPCompressor:
             if not modified or len(''.join(output_bits)) // 8 >= 32:
                 break
         
-        # Process 4-bit patterns ("0000" or "1111")
+        # Process 4-bit patterns ("0000" or "1111") with StateTable
         if len(output_bits) >= 4:
             i = 0
             while i < len(output_bits) - 4:
@@ -1173,7 +1145,7 @@ class PAQJPCompressor:
         return result + padding
 
     def reverse_transform_14(self, data, repeat=255):
-        """Reverse transform_14 by undoing 'xx10...10' to '10...10xx', '01', and '0000'/'1111' patterns."""
+        """Reverse transform_14 by undoing '01' and '0000'/'1111' pattern processing."""
         if len(data) < 1:
             logging.warning("reverse_transform_14: Empty input, returning empty bytes")
             return b''
@@ -1198,9 +1170,8 @@ class PAQJPCompressor:
         prime_index = (len(data) + 1) % len(self.PRIMES)
         xor_bit = '1' if self.PRIMES[prime_index] % 2 == 0 else '0'
         
-        output_bits = list(binary_str)
-        
         # Reverse 4-bit pattern processing
+        output_bits = list(binary_str)
         if len(output_bits) >= 4:
             i = 0
             while i < len(output_bits) - 4:
@@ -1217,48 +1188,17 @@ class PAQJPCompressor:
         for _ in range(max_cycles):
             temp_bits = []
             i = 0
-            modified = False
             while i < len(output_bits) - 2:
                 if output_bits[i:i+2] == ['0', '1']:
                     temp_bits.extend(['0', '1'])
                     next_bit = output_bits[i+2]
                     temp_bits.append('0' if next_bit == xor_bit else '1')
-                    modified = True
                     i += 3
                 else:
                     temp_bits.append(output_bits[i])
                     i += 1
             temp_bits.extend(output_bits[i:])
             output_bits = temp_bits
-            if not modified:
-                break
-        
-        # Reverse "xx10...10" to "10...10xx" patterns
-        for _ in range(max_cycles):
-            temp_bits = []
-            i = 0
-            modified = False
-            while i < len(output_bits):
-                if i + 6 <= len(output_bits) and output_bits[i+2:i+6] == ['1', '0', '1', '0']:
-                    j = i + 6
-                    while j + 2 <= len(output_bits) and output_bits[j:j+2] == ['1', '0']:
-                        j += 2
-                    if j <= len(output_bits):  # Found xx at start
-                        xx = output_bits[i:i+2]
-                        pattern = output_bits[i+2:j]
-                        temp_bits.extend(pattern + xx)  # Move xx to end
-                        logging.info(f"reverse_transform_14: Restored {''.join(xx + pattern)} to {''.join(pattern + xx)} at position {i}")
-                        i = j
-                        modified = True
-                    else:
-                        temp_bits.append(output_bits[i])
-                        i += 1
-                else:
-                    temp_bits.append(output_bits[i])
-                    i += 1
-            output_bits = temp_bits
-            if not modified:
-                break
         
         # Convert back to bytes
         bit_str = ''.join(output_bits)
@@ -1494,8 +1434,8 @@ def detect_filetype(filename: str) -> Filetype:
         return Filetype.DEFAULT
 
 def main():
-    """Main function for PAQJP_6.6 Compression System."""
-    print("PAQJP_6.6 Compression System")
+    """Main function for PAQJP_6.3 Compression System."""
+    print("PAQJP_6.5 Compression System")
     print("Created by Jurijus Pacalovas")
     print("Options:")
     print("1 - Compress file (Best of Smart Compressor [00] or PAQJP_6 [01])")
