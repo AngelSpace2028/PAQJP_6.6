@@ -1434,8 +1434,8 @@ def detect_filetype(filename: str) -> Filetype:
         return Filetype.DEFAULT
 
 def main():
-    """Main function for PAQJP_6.3 Compression System."""
-    print("PAQJP_6.5 Compression System")
+    """Main function for PAQJP_6.6 Compression System."""
+    print("PAQJP_6.6 Compression System")
     print("Created by Jurijus Pacalovas")
     print("Options:")
     print("1 - Compress file (Best of Smart Compressor [00] or PAQJP_6 [01])")
