@@ -9,6 +9,7 @@ import binascii
 import logging
 import paq  # Python binding for PAQ9a (pip install paq)
 import hashlib
+from datetime import datetime
 from enum import Enum
 from typing import List, Dict, Tuple, Optional
 
@@ -1008,7 +1009,7 @@ class PAQJPCompressor:
             logging.warning("transform_13: Empty input, returning empty bytes")
             return b''
         transformed = bytearray(data)
-        table = [row[0] for row in self.state_table.table]
+        table = self.state_table.table  # Empty table, no effect
         table_length = len(table)
         appended_bytes = bytearray()
         data_size_kb = len(data) / 1024
@@ -1017,7 +1018,7 @@ class PAQJPCompressor:
 
         for _ in range(cycles * repeat // 10):
             for i in range(len(transformed)):
-                table_value = table[i % table_length]
+                table_value = 0 if not table else table[i % table_length][0]  # Default to 0 with empty table
                 result = transformed[i] - table_value
                 if result < 0:
                     result += 256
@@ -1036,7 +1037,7 @@ class PAQJPCompressor:
             logging.warning("reverse_transform_13: Empty input, returning empty bytes")
             return b''
         transformed = bytearray(data)
-        table = [row[0] for row in self.state_table.table]
+        table = self.state_table.table  # Empty table, no effect
         table_length = len(table)
         data_size_kb = len(data) / 1024
         cycles = min(10, max(1, int(data_size_kb)))
@@ -1050,7 +1051,7 @@ class PAQJPCompressor:
             for i in range(len(data)):
                 if i >= len(temp_transformed):
                     break
-                table_value = table[i % table_length]
+                table_value = 0 if not table else table[i % table_length][0]  # Default to 0 with empty table
                 original = temp_transformed[i]
                 result = original - table_value
                 if result < 0:
@@ -1065,7 +1066,7 @@ class PAQJPCompressor:
 
         for _ in range(cycles * repeat // 10):
             for i in range(len(transformed)):
-                table_value = table[i % table_length]
+                table_value = 0 if not table else table[i % table_length][0]  # Default to 0 with empty table
                 result = transformed[i]
                 if (i, table_value) in underflow_positions:
                     result = (result + table_value - 256) % 256
@@ -1129,7 +1130,7 @@ class PAQJPCompressor:
                 pattern_4 = ''.join(output_bits[i:i+4])
                 pattern_val = int(pattern_4, 2)
                 if pattern_val in [0b0000, 0b1111] and i + 4 < len(output_bits):
-                    state_value = self.state_table.table[pattern_val % len(self.state_table.table)][0] & 1
+                    state_value = 0  # Default to 0 with empty table
                     output_bits[i + 4] = '0' if output_bits[i + 4] == str(state_value) else '1'
                     i += 5
                 else:
@@ -1178,7 +1179,7 @@ class PAQJPCompressor:
                 pattern_4 = ''.join(output_bits[i:i+4])
                 pattern_val = int(pattern_4, 2)
                 if pattern_val in [0b0000, 0b1111] and i + 4 < len(output_bits):
-                    state_value = self.state_table.table[pattern_val % len(self.state_table.table)][0] & 1
+                    state_value = 0  # Default to 0 with empty table
                     output_bits[i + 4] = '0' if output_bits[i + 4] == str(state_value) else '1'
                     i += 5
                 else:
@@ -1226,6 +1227,27 @@ class PAQJPCompressor:
 
         return transform, reverse_transform
 
+    def transform_15(self, data, repeat=100):
+        """XOR data with a value derived from current time and a prime number."""
+        if not data:
+            logging.warning("transform_15: Empty input, returning empty bytes")
+            return b''
+        transformed = bytearray(data)
+        # Use current time (12:34 PM IST = 1234 in 24-hour format) dynamically
+        current_time = datetime.now().hour * 100 + datetime.now().minute
+        prime_index = len(data) % len(self.PRIMES)
+        time_prime_combo = (current_time * self.PRIMES[prime_index]) % 256
+        logging.info(f"transform_15: Using current_time={current_time}, prime={self.PRIMES[prime_index]}, combo={time_prime_combo}")
+
+        for _ in range(repeat):
+            for i in range(len(transformed)):
+                transformed[i] ^= time_prime_combo
+        return bytes(transformed)
+
+    def reverse_transform_15(self, data, repeat=100):
+        """Reverse transform_15 (same as forward since XOR is symmetric)."""
+        return self.transform_15(data, repeat=repeat)
+
     def compress_with_best_method(self, data, filetype, input_filename, mode="slow"):
         """Compress data using the best transformation method."""
         if not data:
@@ -1250,12 +1272,13 @@ class PAQJPCompressor:
             (9, self.transform_09),
             (12, self.transform_12),
             (14, self.transform_14),
+            (15, self.transform_15),  # Add transform_15
         ]
         slow_transformations = fast_transformations + [
             (10, self.transform_10),
             (11, self.transform_11),
             (13, self.transform_13),
-        ] + [(i, self.generate_transform_method(i)[0]) for i in range(15, 256)]
+        ] + [(i, self.generate_transform_method(i)[0]) for i in range(16, 256)]
 
         if is_dna:
             transformations = [(0, self.transform_genomecompress)] + slow_transformations
@@ -1270,13 +1293,14 @@ class PAQJPCompressor:
                 (12, self.transform_12),
                 (13, self.transform_13),
                 (14, self.transform_14),
+                (15, self.transform_15),  # Add transform_15
             ]
             if is_dna:
                 prioritized = [(0, self.transform_genomecompress)] + prioritized
             if mode == "slow":
                 prioritized += [(10, self.transform_10), (11, self.transform_11)] + \
-                              [(i, self.generate_transform_method(i)[0]) for i in range(15, 256)]
-            transformations = prioritized + [t for t in transformations if t[0] not in [0, 7, 8, 9, 10, 11, 12, 13, 14] + list(range(15, 256))]
+                              [(i, self.generate_transform_method(i)[0]) for i in range(16, 256)]
+            transformations = prioritized + [t for t in transformations if t[0] not in [0, 7, 8, 9, 10, 11, 12, 13, 14, 15] + list(range(16, 256))]
 
         methods = [('paq', self.paq_compress)]
         best_compressed = None
@@ -1342,8 +1366,9 @@ class PAQJPCompressor:
             12: self.reverse_transform_12,
             13: self.reverse_transform_13,
             14: self.reverse_transform_14,
+            15: self.reverse_transform_15,  # Add reverse_transform_15
         }
-        reverse_transforms.update({i: self.generate_transform_method(i)[1] for i in range(15, 256)})
+        reverse_transforms.update({i: self.generate_transform_method(i)[1] for i in range(16, 256)})
 
         if method_marker == 4:
             binary_str = bin(int(binascii.hexlify(compressed_data), 16))[2:].zfill(len(compressed_data) * 8)
