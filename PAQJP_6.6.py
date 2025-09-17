@@ -1087,6 +1087,7 @@ def reverse_transform_13(self, data, repeat=100):
     
     logging.info(f"reverse_transform_13: Restored {len(transformed)} bytes")
     return bytes(transformed)
+    
 def transform_14(self, data, repeat=255):
     """Transform data by processing '01' patterns and 4-bit runs. LOSSLESS."""
     if not data:
