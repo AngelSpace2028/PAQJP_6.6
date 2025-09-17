@@ -1125,105 +1125,7 @@ def reverse_transform_11(self, data, repeat=100):
         
         return bytes(transformed)
 
-    def transform_13(self, data, repeat=100):
-    """Fixed StateTable transform with proper underflow tracking. 100% LOSSLESS."""
-    if not data:
-        logging.warning("transform_13: Empty input, returning empty bytes")
-        return b''
-    
-    transformed = bytearray(data)
-    table = self.state_table.table
-    table_length = len(table)
-    underflow_info = []  # Store (position, table_value) tuples
-    data_size_kb = len(data) / 1024
-    cycles = min(10, max(1, int(data_size_kb)))
-    effective_repeat = min(repeat, max(1, int(data_size_kb * 10)))
-    
-    logging.info(f"transform_13: {cycles} cycles, {effective_repeat} repeats for {len(data)} bytes")
-    
-    # Apply transformations with exact underflow tracking
-    for cycle in range(cycles):
-        for _ in range(effective_repeat // 10):
-            for i in range(len(transformed)):
-                table_value = table[i % table_length][0] if table else 0
-                result = transformed[i] - table_value
-                if result < 0:
-                    underflow_info.append((i, table_value))  # Store EXACT position and table value
-                transformed[i] = (result + 256) % 256
-    
-    # Pack underflow info efficiently: count (2 bytes) + (pos:2B, table_val:1B) per underflow
-    underflow_bytes = bytearray()
-    for pos, table_val in underflow_info:
-        underflow_bytes.extend(struct.pack('>HB', pos, table_val))
-    
-    # Header: cycles (1B) + repeat (1B) + underflow_count (2B) + data_length (4B)
-    data_length = len(transformed)
-    header = struct.pack('>BBHI', cycles, effective_repeat % 256, len(underflow_info), data_length)
-    
-    result = header + bytes(transformed) + underflow_bytes
-    logging.info(f"transform_13: {len(underflow_info)} underflows tracked, total size: {len(result)} bytes")
-    return result
 
-def reverse_transform_13(self, data, repeat=100):
-    """Fixed reverse StateTable transform with exact position matching. 100% LOSSLESS."""
-    if len(data) < 8:  # Need at least header (cycles+repeat+underflow_count+data_length = 8 bytes)
-        logging.warning("reverse_transform_13: Data too short, returning original")
-        return data
-    
-    # Extract header
-    header = data[:8]
-    cycles, stored_repeat, underflow_count, data_length = struct.unpack('>BBHI', header)
-    
-    if len(data) < 8 + data_length + underflow_count * 3:
-        logging.error("reverse_transform_13: Insufficient data for underflow info")
-        return b''
-    
-    # Extract transformed data and underflow info
-    transformed = bytearray(data[8:8 + data_length])
-    underflow_bytes = data[8 + data_length:]
-    
-    # Parse exact underflow positions and values
-    underflow_info = []
-    for i in range(0, len(underflow_bytes), 3):
-        if i + 2 < len(underflow_bytes):
-            pos, table_val = struct.unpack('>HB', underflow_bytes[i:i+3])
-            if pos < len(transformed):  # Valid position
-                underflow_info.append((pos, table_val))
-    
-    table = self.state_table.table
-    table_length = len(table)
-    effective_repeat = stored_repeat
-    
-    logging.info(f"reverse_transform_13: {cycles} cycles, {effective_repeat} repeats, {len(underflow_info)} underflows")
-    
-    # Create lookup for quick access
-    underflow_map = {pos: table_val for pos, table_val in underflow_info}
-    
-    # Reverse transformations in exact reverse order
-    for cycle in range(cycles - 1, -1, -1):
-        for _ in range(effective_repeat // 10):
-            for i in range(len(transformed)):
-                table_value = table[i % table_length][0] if table else 0
-                current = transformed[i]
-                
-                if i in underflow_map and underflow_map[i] == table_value:
-                    # Had underflow: original = current + table_value - 256
-                    result = (current + table_value - 256) % 256
-                    # Remove from map to prevent reuse
-                    del underflow_map[i]
-                else:
-                    # No underflow: original = current + table_value
-                    result = (current + table_value) % 256
-                
-                transformed[i] = result
-    
-    # Verification: check if all underflows were used
-    if underflow_map:
-        logging.warning(f"reverse_transform_13: {len(underflow_map)} unused underflow entries")
-    
-    logging.info(f"reverse_transform_13: Successfully restored {len(transformed)} bytes")
-    return bytes(transformed)
-    
     def transform_13(self, data, repeat=100):
     """Fixed StateTable transform with proper underflow tracking. 100% LOSSLESS."""
     if not data:
@@ -1552,7 +1454,7 @@ def reverse_transform_14(self, data, repeat=255):
     
     logging.info(f"reverse_transform_14: Successfully restored {len(result)}/{original_byte_length} bytes")
     return result
-
+    
     def transform_15(self, data, repeat=100):
         """XOR data with a value derived from current time and a prime number."""
         if not data:
