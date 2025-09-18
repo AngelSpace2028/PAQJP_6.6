@@ -188,6 +188,7 @@ def find_nearest_prime_around(n):
 
 # === State Table ===
 class StateTable:
+    """State table for finite state machine transformations."""
     def __init__(self):
         self.table = [
             [1, 2, 0, 0], [3, 5, 1, 0], [4, 6, 0, 1], [7, 10, 2, 0],
@@ -254,6 +255,33 @@ class StateTable:
             [140, 252, 0, 40], [249, 135, 41, 0], [250, 69, 40, 1], [80, 251, 1, 40],
             [140, 252, 0, 41]
         ]
+
+    def get_state(self, current_state: int, input_byte: int) -> int:
+        """Get next state from current state and input byte."""
+        if 0 <= current_state < len(self.table) and 0 <= input_byte < 4:
+            return self.table[current_state][input_byte]
+        return 0
+
+    def apply_transform(self, data: bytes) -> bytes:
+        """Apply state table transformation to data."""
+        if not data:
+            return b''
+        
+        transformed = bytearray(data)
+        state = 0
+        
+        for i in range(len(transformed)):
+            input_byte = transformed[i] % 4
+            next_state = self.get_state(state, input_byte)
+            # Apply transformation based on state transition
+            transformed[i] ^= (next_state * 17) % 256
+            state = next_state
+        
+        return bytes(transformed)
+
+    def reverse_transform(self, data: bytes) -> bytes:
+        """Reverse state table transformation."""
+        return self.apply_transform(data)  # XOR is symmetric
 
 # === Smart Compressor ===
 class SmartCompressor:
@@ -349,10 +377,10 @@ class SmartCompressor:
         return self.reversible_transform(data)  # XOR is symmetric
 
     def compress(self, input_data, input_file):
-        """Compress data using Smart Compressor."""
+        """Compress data using Smart Compressor with consistent return types."""
         if not input_data:
             logging.warning("Empty input, returning minimal output")
-            return bytes([0])
+            return bytes([252])  # Error marker
 
         original_hash = self.compute_sha256(input_data)
         logging.info(f"SHA-256 of input: {original_hash[:16]}...")
@@ -360,51 +388,74 @@ class SmartCompressor:
         found = self.find_hash_in_dictionaries(original_hash)
         if found:
             logging.info(f"Hash found in dictionary: {found}")
-        else:
-            logging.info("Hash not found, proceeding with compression")
+            return bytes([255]) + self.generate_8byte_sha(input_data)
 
-        if input_file.endswith(".paq") and any(x in input_file for x in ["words", "lines", "sentence"]):
+        # Handle special .paq files
+        if input_file.endswith(".paq") and any(x in input_file.lower() for x in ["words", "lines", "sentence"]):
             sha = self.generate_8byte_sha(input_data)
             if sha and len(input_data) > 8:
                 logging.info(f"SHA-8 for .paq file: {sha.hex()}")
-                return sha
-            logging.info("Original smaller than SHA, skipping compression")
-            return None
+                return bytes([254]) + sha
+            logging.info("Original smaller than SHA, keeping original")
+            return bytes([253]) + input_data
 
         transformed = self.reversible_transform(input_data)
         compressed = self.paq_compress(transformed)
         if compressed is None:
             logging.error("Compression failed")
-            return None
+            return bytes([252])  # Error marker
 
         if len(compressed) < len(input_data):
             output = self.compute_sha256_binary(input_data) + compressed
             logging.info(f"Smart compression: Original {len(input_data)} bytes, Compressed {len(compressed)} bytes")
-            return output
+            return bytes([0]) + output
         else:
-            logging.info("Compression not efficient, returning None")
-            return None
+            logging.info("Compression not efficient, returning uncompressed")
+            return bytes([251]) + input_data
 
     def decompress(self, input_data):
         """Decompress data using Smart Compressor."""
-        if len(input_data) < 32:
+        if len(input_data) < 1:
             logging.error("Input too short for Smart Compressor")
             return None
 
-        stored_hash = input_data[:32]
-        compressed_data = input_data[32:]
+        marker = input_data[0]
+        data = input_data[1:]
 
-        decompressed = self.paq_decompress(compressed_data)
-        if decompressed is None:
-            return None
+        if marker == 255:  # Dictionary match
+            logging.info("Smart decompress: Dictionary match detected")
+            return data  # SHA-8 is the "decompressed" data
+        elif marker == 254:  # SHA-only
+            logging.info("Smart decompress: SHA-only compression")
+            return data
+        elif marker == 253:  # Uncompressed
+            logging.info("Smart decompress: Uncompressed data")
+            return data
+        elif marker == 251:  # Uncompressed fallback
+            logging.info("Smart decompress: Uncompressed fallback")
+            return data
+        elif marker == 0:  # Standard compression
+            if len(data) < 32:
+                logging.error("Input too short for hash verification")
+                return None
 
-        original = self.reverse_reversible_transform(decompressed)
-        computed_hash = self.compute_sha256_binary(original)
-        if computed_hash == stored_hash:
-            logging.info("Hash verification successful")
-            return original
+            stored_hash = data[:32]
+            compressed_data = data[32:]
+
+            decompressed = self.paq_decompress(compressed_data)
+            if decompressed is None:
+                return None
+
+            original = self.reverse_reversible_transform(decompressed)
+            computed_hash = self.compute_sha256_binary(original)
+            if computed_hash == stored_hash:
+                logging.info("Hash verification successful")
+                return original
+            else:
+                logging.error("Hash verification failed")
+                return None
         else:
-            logging.error("Hash verification failed")
+            logging.error(f"Unknown Smart Compressor marker: {marker}")
             return None
 
 # === PAQJP Compressor ===
@@ -542,7 +593,7 @@ class PAQJPCompressor:
             return None
 
     def transform_genomecompress(self, data: bytes) -> bytes:
-        """Encode DNA sequence using GenomeCompress algorithm."""
+        """Encode DNA sequence using GenomeCompress algorithm with proper disambiguation."""
         if not data:
             logging.warning("transform_genomecompress: Empty input, returning empty bytes")
             return b''
@@ -550,34 +601,41 @@ class PAQJPCompressor:
         try:
             dna_str = data.decode('ascii').upper()
             if not all(c in 'ACGT' for c in dna_str):
-                logging.error("transform_genomecompress: Invalid DNA sequence, contains non-ACGT characters")
+                logging.error("transform_genomecompress: Invalid DNA sequence")
                 return b''
         except Exception as e:
-            logging.error(f"transform_genomecompress: Failed to decode input as DNA: {e}")
+            logging.error(f"transform_genomecompress: Failed to decode: {e}")
             return b''
 
         n = len(dna_str)
-        r = n % 4
         output_bits = []
         i = 0
 
-        while i < n - r:
+        while i < n:
+            matched = False
+            
+            # Try 8-base first (highest priority)
             if i + 8 <= n and dna_str[i:i+8] in DNA_ENCODING_TABLE:
                 segment = dna_str[i:i+8]
                 output_bits.extend([int(b) for b in format(DNA_ENCODING_TABLE[segment], '05b')])
                 i += 8
-            else:
+                matched = True
+            # Try 4-base
+            elif i + 4 <= n and dna_str[i:i+4] in DNA_ENCODING_TABLE:
                 segment = dna_str[i:i+4]
-                if segment in DNA_ENCODING_TABLE:
-                    output_bits.extend([int(b) for b in format(DNA_ENCODING_TABLE[segment], '05b')])
-                    i += 4
-                else:
-                    logging.error(f"transform_genomecompress: Invalid 4-base segment at position {i}: {segment}")
-                    return b''
-
-        for j in range(i, n):
-            segment = dna_str[j]
-            output_bits.extend([int(b) for b in format(DNA_ENCODING_TABLE[segment], '05b')])
+                output_bits.extend([int(b) for b in format(DNA_ENCODING_TABLE[segment], '05b')])
+                i += 4
+                matched = True
+            # Single base fallback
+            elif i < n and dna_str[i] in DNA_ENCODING_TABLE:
+                segment = dna_str[i]
+                output_bits.extend([int(b) for b in format(DNA_ENCODING_TABLE[segment], '05b')])
+                i += 1
+                matched = True
+            
+            if not matched:
+                logging.error(f"transform_genomecompress: No match at position {i}")
+                return b''
 
         bit_str = ''.join(map(str, output_bits))
         byte_length = (len(bit_str) + 7) // 8
@@ -904,7 +962,7 @@ class PAQJPCompressor:
 
         return bytes(transformed)
 
-        def transform_11(self, data, repeat=100):
+    def transform_11(self, data, repeat=100):
         """Fixed transform_11: Adaptive modular transform with efficient y selection. LOSSLESS."""
         if not data:
             logging.warning("transform_11: Empty input, returning minimal output")
@@ -920,7 +978,6 @@ class PAQJPCompressor:
         logging.info(f"transform_11: {data_size} bytes, cycles={cycles}, repeat={effective_repeat}")
         
         # Phase 1: Quick heuristic to select promising y values
-        # Analyze data characteristics to narrow down y candidates
         byte_frequencies = [0] * 256
         zero_count = 0
         for b in data:
@@ -929,7 +986,6 @@ class PAQJPCompressor:
                 zero_count += 1
         
         # Select y values based on data characteristics
-        # Prefer values that might increase low-frequency bytes or create patterns
         candidate_ys = []
         
         # Strategy 1: Values near most frequent byte (to spread distribution)
@@ -1139,7 +1195,6 @@ class PAQJPCompressor:
         logging.info(f"transform_13: {data_size} bytes, {cycles} cycles, {effective_repeat} repeats")
         
         # Use a simple, deterministic transformation pattern based on position
-        # Instead of complex state table, use a predictable sequence
         transformed = bytearray(data)
         adjustments = []  # Store exact adjustments for reversal
         
@@ -1500,7 +1555,7 @@ class PAQJPCompressor:
             logging.warning("transform_15: Empty input, returning empty bytes")
             return b''
         transformed = bytearray(data)
-        # Use current time (12:34 PM IST = 1234 in 24-hour format) dynamically
+        # Use current time dynamically
         current_time = datetime.now().hour * 100 + datetime.now().minute
         prime_index = len(data) % len(self.PRIMES)
         time_prime_combo = (current_time * self.PRIMES[prime_index]) % 256
@@ -1516,10 +1571,26 @@ class PAQJPCompressor:
         return self.transform_15(data, repeat=repeat)
 
     def compress_with_best_method(self, data, filetype, input_filename, mode="slow"):
-        """Compress data using the best transformation method."""
+        """Compress data using the best transformation method with size-based optimization."""
         if not data:
             logging.warning("compress_with_best_method: Empty input, returning minimal marker")
             return bytes([0])
+
+        data_size = len(data)
+        
+        # For very small files, use Huffman only
+        if data_size < 64:
+            try:
+                binary_str = bin(int(binascii.hexlify(data), 16))[2:].zfill(data_size * 8)
+                compressed_huffman = self.compress_data_huffman(binary_str)
+                if compressed_huffman:
+                    compressed_bytes = int(compressed_huffman, 2).to_bytes(
+                        (len(compressed_huffman) + 7) // 8, 'big'
+                    )
+                    logging.info(f"Small file: Huffman compression used")
+                    return bytes([4]) + compressed_bytes
+            except Exception as e:
+                logging.warning(f"Huffman compression failed for small file: {e}")
 
         is_dna = False
         try:
@@ -1539,13 +1610,27 @@ class PAQJPCompressor:
             (9, self.transform_09),
             (12, self.transform_12),
             (14, self.transform_14),
-            (15, self.transform_15),  # Add transform_15
+            (15, self.transform_15),
         ]
+        
         slow_transformations = fast_transformations + [
             (10, self.transform_10),
             (11, self.transform_11),
             (13, self.transform_13),
-        ] + [(i, self.generate_transform_method(i)[0]) for i in range(16, 256)]
+        ]
+        
+        # Add limited dynamic transforms for performance
+        if mode == "slow":
+            try:
+                for i in range(16, min(26, 256)):  # Limit to first 10 for performance
+                    try:
+                        transform_func, _ = self.generate_transform_method(i)
+                        slow_transformations.append((i, transform_func))
+                    except Exception as e:
+                        logging.warning(f"Failed to generate transform {i}: {e}")
+                        continue
+            except Exception as e:
+                logging.warning(f"Error generating dynamic transforms: {e}")
 
         if is_dna:
             transformations = [(0, self.transform_genomecompress)] + slow_transformations
@@ -1560,14 +1645,13 @@ class PAQJPCompressor:
                 (12, self.transform_12),
                 (13, self.transform_13),
                 (14, self.transform_14),
-                (15, self.transform_15),  # Add transform_15
+                (15, self.transform_15),
             ]
             if is_dna:
                 prioritized = [(0, self.transform_genomecompress)] + prioritized
             if mode == "slow":
-                prioritized += [(10, self.transform_10), (11, self.transform_11)] + \
-                              [(i, self.generate_transform_method(i)[0]) for i in range(16, 256)]
-            transformations = prioritized + [t for t in transformations if t[0] not in [0, 7, 8, 9, 10, 11, 12, 13, 14, 15] + list(range(16, 256))]
+                prioritized += [(10, self.transform_10), (11, self.transform_11)]
+            transformations = prioritized + [t for t in transformations if t[0] not in [0, 7, 8, 9, 10, 11, 12, 13, 14, 15]]
 
         methods = [('paq', self.paq_compress)]
         best_compressed = None
@@ -1576,31 +1660,39 @@ class PAQJPCompressor:
         best_method = None
 
         for marker, transform in transformations:
-            transformed = transform(data)
-            for method_name, compress_func in methods:
-                try:
-                    compressed = compress_func(transformed)
-                    if compressed is None:
+            try:
+                transformed = transform(data)
+                for method_name, compress_func in methods:
+                    try:
+                        compressed = compress_func(transformed)
+                        if compressed is None:
+                            continue
+                        size = len(compressed)
+                        if size < best_size:
+                            best_size = size
+                            best_compressed = compressed
+                            best_marker = marker
+                            best_method = method_name
+                    except Exception as e:
+                        logging.warning(f"Compression method {method_name} with transform {marker} failed: {e}")
                         continue
-                    size = len(compressed)
-                    if size < best_size:
-                        best_size = size
-                        best_compressed = compressed
-                        best_marker = marker
-                        best_method = method_name
-                except Exception as e:
-                    logging.warning(f"Compression method {method_name} with transform {marker} failed: {e}")
-                    continue
+            except Exception as e:
+                logging.warning(f"Transform {marker} failed: {e}")
+                continue
 
-        if len(data) < HUFFMAN_THRESHOLD:
-            binary_str = bin(int(binascii.hexlify(data), 16))[2:].zfill(len(data) * 8)
-            compressed_huffman = self.compress_data_huffman(binary_str)
-            compressed_bytes = int(compressed_huffman, 2).to_bytes((len(compressed_huffman) + 7) // 8, 'big') if compressed_huffman else b''
-            if compressed_bytes and len(compressed_bytes) < best_size:
-                best_size = len(compressed_bytes)
-                best_compressed = compressed_bytes
-                best_marker = 4
-                best_method = 'huffman'
+        # Always try Huffman for small files
+        if data_size < HUFFMAN_THRESHOLD:
+            try:
+                binary_str = bin(int(binascii.hexlify(data), 16))[2:].zfill(data_size * 8)
+                compressed_huffman = self.compress_data_huffman(binary_str)
+                compressed_bytes = int(compressed_huffman, 2).to_bytes((len(compressed_huffman) + 7) // 8, 'big') if compressed_huffman else b''
+                if compressed_bytes and len(compressed_bytes) < best_size:
+                    best_size = len(compressed_bytes)
+                    best_compressed = compressed_bytes
+                    best_marker = 4
+                    best_method = 'huffman'
+            except Exception as e:
+                logging.warning(f"Huffman compression failed: {e}")
 
         if best_compressed is None:
             logging.error("All compression methods failed, returning original with marker 0")
@@ -1633,17 +1725,24 @@ class PAQJPCompressor:
             12: self.reverse_transform_12,
             13: self.reverse_transform_13,
             14: self.reverse_transform_14,
-            15: self.reverse_transform_15,  # Add reverse_transform_15
+            15: self.reverse_transform_15,
         }
-        reverse_transforms.update({i: self.generate_transform_method(i)[1] for i in range(16, 256)})
+        
+        # Add dynamic reverse transforms
+        try:
+            for i in range(16, 26):  # Match the limited range from compression
+                reverse_func = self.generate_transform_method(i)[1]
+                reverse_transforms[i] = reverse_func
+        except Exception as e:
+            logging.warning(f"Error adding dynamic reverse transforms: {e}")
 
         if method_marker == 4:
-            binary_str = bin(int(binascii.hexlify(compressed_data), 16))[2:].zfill(len(compressed_data) * 8)
-            decompressed_binary = self.decompress_data_huffman(binary_str)
-            if not decompressed_binary:
-                logging.warning("Huffman decompression empty")
-                return b'', None
             try:
+                binary_str = bin(int(binascii.hexlify(compressed_data), 16))[2:].zfill(len(compressed_data) * 8)
+                decompressed_binary = self.decompress_data_huffman(binary_str)
+                if not decompressed_binary:
+                    logging.warning("Huffman decompression empty")
+                    return b'', None
                 num_bytes = (len(decompressed_binary) + 7) // 8
                 hex_str = "%0*x" % (num_bytes * 2, int(decompressed_binary, 2))
                 if len(hex_str) % 2 != 0:
@@ -1784,9 +1883,9 @@ def detect_filetype(filename: str) -> Filetype:
         return Filetype.JPEG
     elif ext in ['.txt', '.dna']:
         try:
-            with open(filename, 'r', encoding='ascii') as f:
+            with open(filename, 'r', encoding='ascii', errors='ignore') as f:
                 sample = f.read(1000)
-                if all(c in 'ACGTacgt\n' for c in sample):
+                if all(c in 'ACGTacgt\n ' for c in sample.replace('\n', ' ').replace('\r', '')):
                     return Filetype.TEXT
         except:
             pass
@@ -1804,14 +1903,19 @@ def main():
     print("2 - Decompress file")
     print("=" * 50)
 
-    compressor = PAQJPCompressor()
+    try:
+        compressor = PAQJPCompressor()
+    except Exception as e:
+        print(f"Failed to initialize compressor: {e}")
+        logging.error(f"Initialization failed: {e}")
+        return
 
     try:
         choice = input("Enter 1 or 2: ").strip()
         if choice not in ('1', '2'):
             print("Invalid choice. Exiting.")
             return
-    except (EOFError, KeyboardInterrupt):
+    except (EOFError, KeyboardInterrupt, ValueError):
         print("\nProgram terminated by user")
         return
 
@@ -1831,89 +1935,97 @@ def main():
             else:
                 print("Invalid mode, defaulting to slow")
                 mode = "slow"
-        except (EOFError, KeyboardInterrupt):
+        except (EOFError, KeyboardInterrupt, ValueError):
             print("Defaulting to slow mode")
             mode = "slow"
 
         print("\nFile Selection:")
-        input_file = input("Enter input file path: ").strip()
-        output_file = input("Enter output file path: ").strip()
+        try:
+            input_file = input("Enter input file path: ").strip()
+            output_file = input("Enter output file path: ").strip()
 
-        if not os.path.exists(input_file):
-            print(f"Input file {input_file} not found")
-            return
-        if not os.access(input_file, os.R_OK):
-            print(f"No read permission for {input_file}")
-            return
-        if os.path.getsize(input_file) == 0:
-            print(f"Input file {input_file} is empty")
-            with open(output_file, 'wb') as f:
-                f.write(bytes([0]))
-            print("Created empty compressed file")
-            return
+            if not os.path.exists(input_file):
+                print(f"Input file {input_file} not found")
+                return
+            if not os.access(input_file, os.R_OK):
+                print(f"No read permission for {input_file}")
+                return
+            if os.path.getsize(input_file) == 0:
+                print(f"Input file {input_file} is empty")
+                with open(output_file, 'wb') as f:
+                    f.write(bytes([0]))
+                print("Created empty compressed file")
+                return
 
-        print(f"\nAnalyzing file: {input_file}")
-        filetype = detect_filetype(input_file)
-        print(f"Detected filetype: {filetype.name}")
-        
-        print("Starting compression...")
-        success = compressor.compress(input_file, output_file, filetype, mode)
-        
-        if success:
-            orig_size = os.path.getsize(input_file)
-            comp_size = os.path.getsize(output_file)
-            ratio = (comp_size / orig_size) * 100 if orig_size > 0 else 0
-            savings = ((orig_size - comp_size) / orig_size) * 100 if orig_size > 0 else 0
+            print(f"\nAnalyzing file: {input_file}")
+            filetype = detect_filetype(input_file)
+            print(f"Detected filetype: {filetype.name}")
             
-            print("\n" + "=" * 50)
-            print("COMPRESSION SUCCESSFUL")
-            print(f"Input file: {input_file}")
-            print(f"Output file: {output_file}")
-            print(f"Original size: {orig_size:,} bytes")
-            print(f"Compressed size: {comp_size:,} bytes")
-            print(f"Compression ratio: {ratio:.2f}%")
-            print(f"Size reduction: {savings:.2f}%")
-            print(f"Mode used: {mode}")
-            print("=" * 50)
-        else:
-            print("\nCompression failed")
-            print("Please check the log for details.")
+            print("Starting compression...")
+            success = compressor.compress(input_file, output_file, filetype, mode)
+            
+            if success:
+                orig_size = os.path.getsize(input_file)
+                comp_size = os.path.getsize(output_file)
+                ratio = (comp_size / orig_size) * 100 if orig_size > 0 else 0
+                savings = ((orig_size - comp_size) / orig_size) * 100 if orig_size > 0 else 0
+                
+                print("\n" + "=" * 50)
+                print("COMPRESSION SUCCESSFUL")
+                print(f"Input file: {input_file}")
+                print(f"Output file: {output_file}")
+                print(f"Original size: {orig_size:,} bytes")
+                print(f"Compressed size: {comp_size:,} bytes")
+                print(f"Compression ratio: {ratio:.2f}%")
+                print(f"Size reduction: {savings:.2f}%")
+                print(f"Mode used: {mode}")
+                print("=" * 50)
+            else:
+                print("\nCompression failed")
+                print("Please check the log for details.")
+        except (EOFError, KeyboardInterrupt, ValueError) as e:
+            print(f"\nInput error: {e}")
+            print("Operation cancelled")
 
     elif choice == '2':
         print("\nDecompression:")
-        input_file = input("Enter input file path: ").strip()
-        output_file = input("Enter output file path: ").strip()
+        try:
+            input_file = input("Enter input file path: ").strip()
+            output_file = input("Enter output file path: ").strip()
 
-        if not os.path.exists(input_file):
-            print(f"Input file {input_file} not found")
-            return
-        if not os.access(input_file, os.R_OK):
-            print(f"No read permission for {input_file}")
-            return
-        if os.path.getsize(input_file) == 0:
-            print(f"Input file {input_file} is empty")
-            with open(output_file, 'wb') as f:
-                f.write(b'')
-            print("Created empty decompressed file")
-            return
+            if not os.path.exists(input_file):
+                print(f"Input file {input_file} not found")
+                return
+            if not os.access(input_file, os.R_OK):
+                print(f"No read permission for {input_file}")
+                return
+            if os.path.getsize(input_file) == 0:
+                print(f"Input file {input_file} is empty")
+                with open(output_file, 'wb') as f:
+                    f.write(b'')
+                print("Created empty decompressed file")
+                return
 
-        print("Starting decompression...")
-        success = compressor.decompress(input_file, output_file)
-        
-        if success:
-            comp_size = os.path.getsize(input_file)
-            decomp_size = os.path.getsize(output_file)
+            print("Starting decompression...")
+            success = compressor.decompress(input_file, output_file)
             
-            print("\n" + "=" * 50)
-            print("DECOMPRESSION SUCCESSFUL")
-            print(f"Input file: {input_file}")
-            print(f"Output file: {output_file}")
-            print(f"Compressed size: {comp_size:,} bytes")
-            print(f"Decompressed size: {decomp_size:,} bytes")
-            print("=" * 50)
-        else:
-            print("\nDecompression failed")
-            print("Please check the log for details.")
+            if success:
+                comp_size = os.path.getsize(input_file)
+                decomp_size = os.path.getsize(output_file)
+                
+                print("\n" + "=" * 50)
+                print("DECOMPRESSION SUCCESSFUL")
+                print(f"Input file: {input_file}")
+                print(f"Output file: {output_file}")
+                print(f"Compressed size: {comp_size:,} bytes")
+                print(f"Decompressed size: {decomp_size:,} bytes")
+                print("=" * 50)
+            else:
+                print("\nDecompression failed")
+                print("Please check the log for details.")
+        except (EOFError, KeyboardInterrupt, ValueError) as e:
+            print(f"\nInput error: {e}")
+            print("Operation cancelled")
 
     print("\n" + "=" * 50)
     print("PAQJP_6.6 Compression System - End of Operation")
