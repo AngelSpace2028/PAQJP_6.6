@@ -1126,10 +1126,10 @@ def reverse_transform_11(self, data, repeat=100):
         return bytes(transformed)
 
     def transform_13(self, data, repeat=100):
-    """Fixed StateTable transform: Simple, deterministic, 100% lossless."""
-    if not data:
-        logging.warning("transform_13: Empty input, returning empty bytes")
-        return b''
+        #Fixed StateTable transform: Simple, deterministic, 100% lossless.
+        if not data:
+            logging.warning("transform_13: Empty input, returning empty bytes")
+            return b''
     
     data_size = len(data)
     data_size_kb = data_size / 1024
