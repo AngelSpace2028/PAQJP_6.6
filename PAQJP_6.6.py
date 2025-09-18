@@ -904,7 +904,7 @@ class PAQJPCompressor:
 
         return bytes(transformed)
 
-    def transform_11(self, data, repeat=100):
+        def transform_11(self, data, repeat=100):
         """Fixed transform_11: Adaptive modular transform with efficient y selection. LOSSLESS."""
         if not data:
             logging.warning("transform_11: Empty input, returning minimal output")
@@ -1607,7 +1607,9 @@ class PAQJPCompressor:
             return bytes([0]) + data
 
         logging.info(f"Best method: {best_method}, Marker: {best_marker} for {filetype.name} in {mode} mode")
-        return bytes([best_marker]) +     def decompress_with_best_method(self, data):
+        return bytes([best_marker]) + best_compressed
+
+    def decompress_with_best_method(self, data):
         """Decompress data based on marker."""
         if len(data) < 1:
             logging.warning("decompress_with_best_method: Insufficient data")
@@ -1796,9 +1798,11 @@ def main():
     """Main function for PAQJP_6.6 Compression System."""
     print("PAQJP_6.6 Compression System")
     print("Created by Jurijus Pacalovas")
+    print("=" * 50)
     print("Options:")
     print("1 - Compress file (Best of Smart Compressor [00] or PAQJP_6 [01])")
     print("2 - Decompress file")
+    print("=" * 50)
 
     compressor = PAQJPCompressor()
 
@@ -1808,17 +1812,22 @@ def main():
             print("Invalid choice. Exiting.")
             return
     except (EOFError, KeyboardInterrupt):
-        print("Program terminated by user")
+        print("\nProgram terminated by user")
         return
 
     mode = "slow"
     if choice == '1':
+        print("\nCompression Mode Selection:")
+        print("1 - Fast mode (basic transforms)")
+        print("2 - Slow mode (advanced transforms)")
         try:
-            mode_choice = input("Enter compression mode (1 for fast, 2 for slow): ").strip()
+            mode_choice = input("Enter mode (1 for fast, 2 for slow): ").strip()
             if mode_choice == '1':
                 mode = "fast"
+                print("Selected: Fast mode")
             elif mode_choice == '2':
                 mode = "slow"
+                print("Selected: Slow mode")
             else:
                 print("Invalid mode, defaulting to slow")
                 mode = "slow"
@@ -1826,6 +1835,7 @@ def main():
             print("Defaulting to slow mode")
             mode = "slow"
 
+        print("\nFile Selection:")
         input_file = input("Enter input file path: ").strip()
         output_file = input("Enter output file path: ").strip()
 
@@ -1839,20 +1849,38 @@ def main():
             print(f"Input file {input_file} is empty")
             with open(output_file, 'wb') as f:
                 f.write(bytes([0]))
+            print("Created empty compressed file")
             return
 
+        print(f"\nAnalyzing file: {input_file}")
         filetype = detect_filetype(input_file)
+        print(f"Detected filetype: {filetype.name}")
+        
+        print("Starting compression...")
         success = compressor.compress(input_file, output_file, filetype, mode)
+        
         if success:
             orig_size = os.path.getsize(input_file)
             comp_size = os.path.getsize(output_file)
             ratio = (comp_size / orig_size) * 100 if orig_size > 0 else 0
-            print(f"Compression successful: {output_file}, Size: {comp_size} bytes")
-            print(f"Original: {orig_size} bytes, Compressed: {comp_size} bytes, Ratio: {ratio:.2f}%")
+            savings = ((orig_size - comp_size) / orig_size) * 100 if orig_size > 0 else 0
+            
+            print("\n" + "=" * 50)
+            print("COMPRESSION SUCCESSFUL")
+            print(f"Input file: {input_file}")
+            print(f"Output file: {output_file}")
+            print(f"Original size: {orig_size:,} bytes")
+            print(f"Compressed size: {comp_size:,} bytes")
+            print(f"Compression ratio: {ratio:.2f}%")
+            print(f"Size reduction: {savings:.2f}%")
+            print(f"Mode used: {mode}")
+            print("=" * 50)
         else:
-            print("Compression failed")
+            print("\nCompression failed")
+            print("Please check the log for details.")
 
     elif choice == '2':
+        print("\nDecompression:")
         input_file = input("Enter input file path: ").strip()
         output_file = input("Enter output file path: ").strip()
 
@@ -1866,16 +1894,31 @@ def main():
             print(f"Input file {input_file} is empty")
             with open(output_file, 'wb') as f:
                 f.write(b'')
+            print("Created empty decompressed file")
             return
 
+        print("Starting decompression...")
         success = compressor.decompress(input_file, output_file)
+        
         if success:
             comp_size = os.path.getsize(input_file)
             decomp_size = os.path.getsize(output_file)
-            print(f"Decompression successful: {output_file}")
-            print(f"Compressed: {comp_size} bytes, Decompressed: {decomp_size} bytes")
+            
+            print("\n" + "=" * 50)
+            print("DECOMPRESSION SUCCESSFUL")
+            print(f"Input file: {input_file}")
+            print(f"Output file: {output_file}")
+            print(f"Compressed size: {comp_size:,} bytes")
+            print(f"Decompressed size: {decomp_size:,} bytes")
+            print("=" * 50)
         else:
-            print("Decompression failed")
+            print("\nDecompression failed")
+            print("Please check the log for details.")
+
+    print("\n" + "=" * 50)
+    print("PAQJP_6.6 Compression System - End of Operation")
+    print("Created by Jurijus Pacalovas")
+    print("=" * 50)
 
 if __name__ == "__main__":
     main()
