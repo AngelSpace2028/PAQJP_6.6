@@ -904,191 +904,191 @@ class PAQJPCompressor:
 
         return bytes(transformed)
 
-def transform_11(self, data, repeat=100):
-    """Fixed transform_11: Adaptive modular transform with efficient y selection. LOSSLESS."""
-    if not data:
-        logging.warning("transform_11: Empty input, returning minimal output")
-        return struct.pack('>B', 0)  # Marker for no transformation
-    
-    data_size = len(data)
-    data_size_kb = data_size / 1024
-    
-    # Scale repeats based on data size (avoid excessive computation)
-    effective_repeat = min(repeat, max(1, int(data_size_kb * 10)))
-    cycles = min(5, max(1, int(data_size_kb)))  # Limit cycles to prevent excessive computation
-    
-    logging.info(f"transform_11: {data_size} bytes, cycles={cycles}, repeat={effective_repeat}")
-    
-    # Phase 1: Quick heuristic to select promising y values
-    # Analyze data characteristics to narrow down y candidates
-    byte_frequencies = [0] * 256
-    zero_count = 0
-    for b in data:
-        byte_frequencies[b] += 1
-        if b == 0:
-            zero_count += 1
-    
-    # Select y values based on data characteristics
-    # Prefer values that might increase low-frequency bytes or create patterns
-    candidate_ys = []
-    
-    # Strategy 1: Values near most frequent byte (to spread distribution)
-    if max(byte_frequencies) > data_size * 0.1:  # If one byte dominates
-        most_freq_byte = byte_frequencies.index(max(byte_frequencies))
-        candidate_ys.extend([most_freq_byte + i for i in [-10, -5, 0, 5, 10]])
-    
-    # Strategy 2: Values that create more zeros (good for compression)
-    candidate_ys.extend([1, 2, 4, 8, 16, 32, 64, 128, 255])  # Powers of 2 and extremes
-    
-    # Strategy 3: Values based on data size characteristics
-    candidate_ys.append(data_size % 256)
-    candidate_ys.append((data_size * 17) % 256)  # Prime multiplier
-    
-    # Remove duplicates and filter to 0-255 range
-    candidate_ys = list(set([y % 256 for y in candidate_ys if 0 <= y <= 255]))
-    # Limit to 20 candidates for efficiency
-    candidate_ys = candidate_ys[:20]
-    
-    if not candidate_ys:
-        candidate_ys = [1, 64, 128, 255]  # Fallback candidates
-    
-    logging.info(f"transform_11: Testing {len(candidate_ys)} candidate y values")
-    
-    # Phase 2: Test candidates with lightweight scoring (not full compression)
-    best_y = None
-    best_score = float('inf')
-    best_transformed = None
-    
-    # Quick scoring function - count zero runs and entropy reduction
-    def score_transformation(transformed_data):
-        """Score transformation based on zero runs and byte distribution."""
-        score = 0
-        zero_run_length = 0
-        byte_counts = [0] * 256
+    def transform_11(self, data, repeat=100):
+        """Fixed transform_11: Adaptive modular transform with efficient y selection. LOSSLESS."""
+        if not data:
+            logging.warning("transform_11: Empty input, returning minimal output")
+            return struct.pack('>B', 0)  # Marker for no transformation
         
-        for b in transformed_data:
-            byte_counts[b] += 1
-            if b == 0:
-                zero_run_length += 1
-                score += zero_run_length  # Longer runs = better score
-            else:
-                zero_run_length = 0
-        
-        # Add entropy penalty (prefer more uniform distribution)
-        entropy = sum((count / len(transformed_data)) * math.log2(count / len(transformed_data) + 1e-10) 
-                     for count in byte_counts if count > 0)
-        score -= entropy * 10  # Lower entropy (more uniform) is better
-        
-        return score
-    
-    # Test each candidate
-    for y in candidate_ys:
-        transformed = bytearray(data)
-        
-        # Apply transformation (same number of times as will be reversed)
-        for _ in range(effective_repeat):
-            for i in range(len(transformed)):
-                transformed[i] = (transformed[i] + y + 1) % 256
-        
-        current_score = score_transformation(transformed)
-        
-        if current_score < best_score:
-            best_score = current_score
-            best_y = y
-            best_transformed = bytes(transformed)
-    
-    # If no good transformation found, use y=0 (no-op)
-    if best_y is None:
-        best_y = 0
-        best_transformed = data
-        logging.warning("transform_11: No improvement found, using y=0 (no transformation)")
-    
-    # Phase 3: Store metadata and return
-    # Metadata format: y_value (1 byte) + repeat_count (1 byte) + cycles (1 byte)
-    metadata = struct.pack('>BBB', best_y, effective_repeat % 256, cycles)
-    
-    # For verification/logging: compute a quick hash of transformed data
-    quick_hash = sum(best_transformed) % 256
-    metadata += struct.pack('>B', quick_hash)  # 1 byte hash for basic integrity check
-    
-    logging.info(f"transform_11: Selected y={best_y}, score={best_score:.1f}, "
-                f"zeros={sum(1 for b in best_transformed if b == 0)}")
-    
-    result = metadata + best_transformed
-    logging.info(f"transform_11: Original {data_size} bytes -> {len(result)} bytes (metadata: {len(metadata)})")
-    
-    return result
-
-def reverse_transform_11(self, data, repeat=100):
-    """Fixed reverse_transform_11: Perfectly reverses transform_11. LOSSLESS."""
-    if len(data) < 5:  # Need at least metadata (4 bytes)
-        logging.warning("reverse_transform_11: Data too short, returning original")
-        return data
-    
-    # Extract metadata
-    metadata = data[:4]
-    transformed_data = data[4:]
-    
-    if not transformed_data:
-        logging.warning("reverse_transform_11: No transformed data, returning empty")
-        return b''
-    
-    try:
-        y, stored_repeat, cycles = struct.unpack('>BBB', metadata[:3])
-        quick_hash = metadata[3]
-        
-        # Verify basic integrity with quick hash
-        computed_hash = sum(transformed_data) % 256
-        if computed_hash != quick_hash:
-            logging.warning(f"reverse_transform_11: Hash mismatch (expected {quick_hash}, got {computed_hash})")
-            # Continue anyway - hash is just for basic sanity check
-        
-        data_size = len(transformed_data)
+        data_size = len(data)
         data_size_kb = data_size / 1024
         
-        # Use stored repeat count, but respect data size limits
-        effective_repeat = stored_repeat
-        if effective_repeat > data_size * 2:  # Sanity check
-            effective_repeat = min(effective_repeat, max(1, int(data_size_kb * 10)))
-            logging.warning(f"reverse_transform_11: Adjusted repeat from {stored_repeat} to {effective_repeat}")
+        # Scale repeats based on data size (avoid excessive computation)
+        effective_repeat = min(repeat, max(1, int(data_size_kb * 10)))
+        cycles = min(5, max(1, int(data_size_kb)))  # Limit cycles to prevent excessive computation
         
-        logging.info(f"reverse_transform_11: y={y}, repeat={effective_repeat}, cycles={cycles}, "
-                    f"data_size={data_size} bytes")
+        logging.info(f"transform_11: {data_size} bytes, cycles={cycles}, repeat={effective_repeat}")
         
-        # Reverse the transformation
-        restored = bytearray(transformed_data)
+        # Phase 1: Quick heuristic to select promising y values
+        # Analyze data characteristics to narrow down y candidates
+        byte_frequencies = [0] * 256
+        zero_count = 0
+        for b in data:
+            byte_frequencies[b] += 1
+            if b == 0:
+                zero_count += 1
         
-        # Apply inverse transformation the same number of times
-        for _ in range(effective_repeat):
-            for i in range(len(restored)):
-                restored[i] = (restored[i] - y - 1) % 256
+        # Select y values based on data characteristics
+        # Prefer values that might increase low-frequency bytes or create patterns
+        candidate_ys = []
         
-        # Convert back to bytes
-        result = bytes(restored)
+        # Strategy 1: Values near most frequent byte (to spread distribution)
+        if max(byte_frequencies) > data_size * 0.1:  # If one byte dominates
+            most_freq_byte = byte_frequencies.index(max(byte_frequencies))
+            candidate_ys.extend([most_freq_byte + i for i in [-10, -5, 0, 5, 10]])
         
-        # Basic verification: check if we got reasonable data
-        zero_count_original = sum(1 for b in result if b == 0)
-        zero_count_transformed = sum(1 for b in transformed_data if b == 0)
+        # Strategy 2: Values that create more zeros (good for compression)
+        candidate_ys.extend([1, 2, 4, 8, 16, 32, 64, 128, 255])  # Powers of 2 and extremes
         
-        logging.info(f"reverse_transform_11: Restored {len(result)} bytes, "
-                    f"zeros: {zero_count_original} (original) vs {zero_count_transformed} (transformed)")
+        # Strategy 3: Values based on data size characteristics
+        candidate_ys.append(data_size % 256)
+        candidate_ys.append((data_size * 17) % 256)  # Prime multiplier
         
-        # If y was 0, this should be a no-op
-        if y == 0:
-            if result != transformed_data:
-                logging.error("reverse_transform_11: y=0 should be no-op but data changed!")
-                return transformed_data  # Return original transformed data
-            logging.info("reverse_transform_11: y=0 confirmed as no-op")
+        # Remove duplicates and filter to 0-255 range
+        candidate_ys = list(set([y % 256 for y in candidate_ys if 0 <= y <= 255]))
+        # Limit to 20 candidates for efficiency
+        candidate_ys = candidate_ys[:20]
+        
+        if not candidate_ys:
+            candidate_ys = [1, 64, 128, 255]  # Fallback candidates
+        
+        logging.info(f"transform_11: Testing {len(candidate_ys)} candidate y values")
+        
+        # Phase 2: Test candidates with lightweight scoring (not full compression)
+        best_y = None
+        best_score = float('inf')
+        best_transformed = None
+        
+        # Quick scoring function - count zero runs and entropy reduction
+        def score_transformation(transformed_data):
+            """Score transformation based on zero runs and byte distribution."""
+            score = 0
+            zero_run_length = 0
+            byte_counts = [0] * 256
+            
+            for b in transformed_data:
+                byte_counts[b] += 1
+                if b == 0:
+                    zero_run_length += 1
+                    score += zero_run_length  # Longer runs = better score
+                else:
+                    zero_run_length = 0
+            
+            # Add entropy penalty (prefer more uniform distribution)
+            entropy = sum((count / len(transformed_data)) * math.log2(count / len(transformed_data) + 1e-10) 
+                         for count in byte_counts if count > 0)
+            score -= entropy * 10  # Lower entropy (more uniform) is better
+            
+            return score
+        
+        # Test each candidate
+        for y in candidate_ys:
+            transformed = bytearray(data)
+            
+            # Apply transformation (same number of times as will be reversed)
+            for _ in range(effective_repeat):
+                for i in range(len(transformed)):
+                    transformed[i] = (transformed[i] + y + 1) % 256
+            
+            current_score = score_transformation(transformed)
+            
+            if current_score < best_score:
+                best_score = current_score
+                best_y = y
+                best_transformed = bytes(transformed)
+        
+        # If no good transformation found, use y=0 (no-op)
+        if best_y is None:
+            best_y = 0
+            best_transformed = data
+            logging.warning("transform_11: No improvement found, using y=0 (no transformation)")
+        
+        # Phase 3: Store metadata and return
+        # Metadata format: y_value (1 byte) + repeat_count (1 byte) + cycles (1 byte)
+        metadata = struct.pack('>BBB', best_y, effective_repeat % 256, cycles)
+        
+        # For verification/logging: compute a quick hash of transformed data
+        quick_hash = sum(best_transformed) % 256
+        metadata += struct.pack('>B', quick_hash)  # 1 byte hash for basic integrity check
+        
+        logging.info(f"transform_11: Selected y={best_y}, score={best_score:.1f}, "
+                    f"zeros={sum(1 for b in best_transformed if b == 0)}")
+        
+        result = metadata + best_transformed
+        logging.info(f"transform_11: Original {data_size} bytes -> {len(result)} bytes (metadata: {len(metadata)})")
         
         return result
+
+    def reverse_transform_11(self, data, repeat=100):
+        """Fixed reverse_transform_11: Perfectly reverses transform_11. LOSSLESS."""
+        if len(data) < 5:  # Need at least metadata (4 bytes)
+            logging.warning("reverse_transform_11: Data too short, returning original")
+            return data
         
-    except struct.error as e:
-        logging.error(f"reverse_transform_11: Failed to unpack metadata: {e}")
-        return data[4:]  # Return transformed data as fallback
-    except Exception as e:
-        logging.error(f"reverse_transform_11: Unexpected error: {e}")
-        return data[4:]  # Return transformed data as fallback
+        # Extract metadata
+        metadata = data[:4]
+        transformed_data = data[4:]
         
+        if not transformed_data:
+            logging.warning("reverse_transform_11: No transformed data, returning empty")
+            return b''
+        
+        try:
+            y, stored_repeat, cycles = struct.unpack('>BBB', metadata[:3])
+            quick_hash = metadata[3]
+            
+            # Verify basic integrity with quick hash
+            computed_hash = sum(transformed_data) % 256
+            if computed_hash != quick_hash:
+                logging.warning(f"reverse_transform_11: Hash mismatch (expected {quick_hash}, got {computed_hash})")
+                # Continue anyway - hash is just for basic sanity check
+            
+            data_size = len(transformed_data)
+            data_size_kb = data_size / 1024
+            
+            # Use stored repeat count, but respect data size limits
+            effective_repeat = stored_repeat
+            if effective_repeat > data_size * 2:  # Sanity check
+                effective_repeat = min(effective_repeat, max(1, int(data_size_kb * 10)))
+                logging.warning(f"reverse_transform_11: Adjusted repeat from {stored_repeat} to {effective_repeat}")
+            
+            logging.info(f"reverse_transform_11: y={y}, repeat={effective_repeat}, cycles={cycles}, "
+                        f"data_size={data_size} bytes")
+            
+            # Reverse the transformation
+            restored = bytearray(transformed_data)
+            
+            # Apply inverse transformation the same number of times
+            for _ in range(effective_repeat):
+                for i in range(len(restored)):
+                    restored[i] = (restored[i] - y - 1) % 256
+            
+            # Convert back to bytes
+            result = bytes(restored)
+            
+            # Basic verification: check if we got reasonable data
+            zero_count_original = sum(1 for b in result if b == 0)
+            zero_count_transformed = sum(1 for b in transformed_data if b == 0)
+            
+            logging.info(f"reverse_transform_11: Restored {len(result)} bytes, "
+                        f"zeros: {zero_count_original} (original) vs {zero_count_transformed} (transformed)")
+            
+            # If y was 0, this should be a no-op
+            if y == 0:
+                if result != transformed_data:
+                    logging.error("reverse_transform_11: y=0 should be no-op but data changed!")
+                    return transformed_data  # Return original transformed data
+                logging.info("reverse_transform_11: y=0 confirmed as no-op")
+            
+            return result
+            
+        except struct.error as e:
+            logging.error(f"reverse_transform_11: Failed to unpack metadata: {e}")
+            return data[4:]  # Return transformed data as fallback
+        except Exception as e:
+            logging.error(f"reverse_transform_11: Unexpected error: {e}")
+            return data[4:]  # Return transformed data as fallback
+
     def transform_12(self, data, repeat=100):
         """XOR with Fibonacci sequence."""
         if not data:
@@ -1125,378 +1125,375 @@ def reverse_transform_11(self, data, repeat=100):
         
         return bytes(transformed)
 
-def transform_13(self, data, repeat=100):
-    #Fixed StateTable transform: Simple, deterministic, 100% lossless.
-    if not data:
-        logging.warning("transform_13: Empty input, returning empty bytes")
-        return b''
-    
-    data_size = len(data)
-    data_size_kb = data_size / 1024
-    cycles = min(5, max(1, int(data_size_kb)))  # Conservative cycle limit
-    effective_repeat = min(repeat, max(1, int(data_size_kb * 5)))
-    
-    logging.info(f"transform_13: {data_size} bytes, {cycles} cycles, {effective_repeat} repeats")
-    
-    # Use a simple, deterministic transformation pattern based on position
-    # Instead of complex state table, use a predictable sequence
-    transformed = bytearray(data)
-    adjustments = []  # Store exact adjustments for reversal
-    
-    # Generate deterministic adjustment sequence based on position
-    for cycle in range(cycles):
-        for r in range(effective_repeat):
-            for i in range(data_size):
-                # Deterministic adjustment: (i * cycle * r) % 256
-                adjustment = ((i * 17 * cycle * r) % 256)  # 17 is prime
-                original_byte = transformed[i]
-                new_byte = (original_byte - adjustment) % 256
-                
-                # Store the exact adjustment applied
-                adjustments.append((i, adjustment))
-                
-                transformed[i] = new_byte
-    
-    # Pack metadata efficiently
-    # Format: cycles(1B) + repeat(1B) + data_len(4B) + adjustments(n*3B)
-    metadata = struct.pack('>BBI', cycles, effective_repeat, data_size)
-    
-    # Pack adjustments: position(2B) + adjustment(1B) for each
-    adjustment_bytes = bytearray()
-    for pos, adj in adjustments:
-        adjustment_bytes.extend(struct.pack('>HB', pos, adj))
-    
-    result = metadata + bytes(transformed) + adjustment_bytes
-    
-    # Verify lossless by reconstructing a sample
-    test_reconstruct = self._test_reverse_transform_13(result)
-    if test_reconstruct != data:
-        logging.error("transform_13: Self-test failed!")
-        return data  # Fallback to original
-    
-    logging.info(f"transform_13: Applied {len(adjustments)} adjustments, result: {len(result)} bytes")
-    return result    
+    def transform_13(self, data, repeat=100):
+        """Fixed StateTable transform: Simple, deterministic, 100% lossless."""
+        if not data:
+            logging.warning("transform_13: Empty input, returning empty bytes")
+            return b''
+        
+        data_size = len(data)
+        data_size_kb = data_size / 1024
+        cycles = min(5, max(1, int(data_size_kb)))  # Conservative cycle limit
+        effective_repeat = min(repeat, max(1, int(data_size_kb * 5)))
+        
+        logging.info(f"transform_13: {data_size} bytes, {cycles} cycles, {effective_repeat} repeats")
+        
+        # Use a simple, deterministic transformation pattern based on position
+        # Instead of complex state table, use a predictable sequence
+        transformed = bytearray(data)
+        adjustments = []  # Store exact adjustments for reversal
+        
+        # Generate deterministic adjustment sequence based on position
+        for cycle in range(cycles):
+            for r in range(effective_repeat):
+                for i in range(data_size):
+                    # Deterministic adjustment: (i * cycle * r) % 256
+                    adjustment = ((i * 17 * cycle * r) % 256)  # 17 is prime
+                    original_byte = transformed[i]
+                    new_byte = (original_byte - adjustment) % 256
+                    
+                    # Store the exact adjustment applied
+                    adjustments.append((i, adjustment))
+                    
+                    transformed[i] = new_byte
+        
+        # Pack metadata efficiently
+        # Format: cycles(1B) + repeat(1B) + data_len(4B) + adjustments(n*3B)
+        metadata = struct.pack('>BBI', cycles, effective_repeat, data_size)
+        
+        # Pack adjustments: position(2B) + adjustment(1B) for each
+        adjustment_bytes = bytearray()
+        for pos, adj in adjustments:
+            adjustment_bytes.extend(struct.pack('>HB', pos, adj))
+        
+        result = metadata + bytes(transformed) + adjustment_bytes
+        
+        # Verify lossless by reconstructing a sample
+        test_reconstruct = self._test_reverse_transform_13(result)
+        if test_reconstruct != data:
+            logging.error("transform_13: Self-test failed!")
+            return data  # Fallback to original
+        
+        logging.info(f"transform_13: Applied {len(adjustments)} adjustments, result: {len(result)} bytes")
+        return result    
 
-def reverse_transform_13(self, data, repeat=100):
-    """Fixed reverse StateTable transform: Perfect reconstruction."""
-    if len(data) < 7:  # Need at least metadata (1+1+4=6 bytes) + 1 byte data
-        logging.warning("reverse_transform_13: Data too short, returning original")
-        return data[6:] if len(data) > 6 else b''
-    
-    try:
-        # Extract metadata
-        metadata = data[:7]
-        cycles, effective_repeat, original_size = struct.unpack('>BBI', metadata)
+    def reverse_transform_13(self, data, repeat=100):
+        """Fixed reverse StateTable transform: Perfect reconstruction."""
+        if len(data) < 7:  # Need at least metadata (1+1+4=6 bytes) + 1 byte data
+            logging.warning("reverse_transform_13: Data too short, returning original")
+            return data[6:] if len(data) > 6 else b''
         
-        if original_size == 0:
-            logging.warning("reverse_transform_13: Original size is 0")
-            return b''
-        
-        # Extract transformed data
-        transformed_data_start = 7
-        transformed_data_end = transformed_data_start + original_size
-        
-        if len(data) < transformed_data_end:
-            logging.error("reverse_transform_13: Insufficient data length")
-            return b''
-        
-        transformed = bytearray(data[transformed_data_start:transformed_data_end])
-        
-        # Extract adjustment data
-        adjustment_bytes = data[transformed_data_end:]
-        num_adjustments = len(adjustment_bytes) // 3
-        
-        # Parse adjustments
-        adjustments = []
-        for i in range(0, len(adjustment_bytes), 3):
-            if i + 2 < len(adjustment_bytes):
-                pos, adjustment = struct.unpack('>HB', adjustment_bytes[i:i+3])
-                if 0 <= pos < original_size:
-                    adjustments.append((pos, adjustment))
-        
-        # Apply reverse adjustments in exact reverse order
-        restored = bytearray(transformed)
-        
-        # Process adjustments in reverse chronological order
-        for adjustment_idx in range(len(adjustments) - 1, -1, -1):
-            pos, adjustment = adjustments[adjustment_idx]
-            if 0 <= pos < len(restored):
-                restored[pos] = (restored[pos] + adjustment) % 256
-        
-        # Verify reconstruction
-        if len(restored) != original_size:
-            logging.error(f"reverse_transform_13: Size mismatch: {len(restored)} != {original_size}")
-            return b''
-        
-        logging.info(f"reverse_transform_13: Restored {original_size} bytes using {len(adjustments)} adjustments")
-        return bytes(restored)
-        
-    except struct.error as e:
-        logging.error(f"reverse_transform_13: Metadata parsing failed: {e}")
-        return b''
-    except Exception as e:
-        logging.error(f"reverse_transform_13: Unexpected error: {e}")
-        return b''
-
-def _test_reverse_transform_13(self, transformed_data):
-    """Internal test function to verify lossless reconstruction."""
-    try:
-        # Extract metadata for testing
-        if len(transformed_data) < 7:
-            return b''
-        
-        metadata = transformed_data[:7]
-        cycles, effective_repeat, original_size = struct.unpack('>BBI', metadata)
-        
-        transformed_start = 7
-        transformed_end = transformed_start + original_size
-        if len(transformed_data) < transformed_end:
-            return b''
-        
-        transformed = bytearray(transformed_data[transformed_start:transformed_end])
-        adjustment_bytes = transformed_data[transformed_end:]
-        
-        # Parse adjustments
-        adjustments = []
-        for i in range(0, len(adjustment_bytes), 3):
-            if i + 2 < len(adjustment_bytes):
-                pos, adjustment = struct.unpack('>HB', adjustment_bytes[i:i+3])
-                if 0 <= pos < original_size:
-                    adjustments.append((pos, adjustment))
-        
-        # Test reconstruction
-        test_restored = bytearray(transformed)
-        for adjustment_idx in range(len(adjustments) - 1, -1, -1):
-            pos, adjustment = adjustments[adjustment_idx]
-            if 0 <= pos < len(test_restored):
-                test_restored[pos] = (test_restored[pos] + adjustment) % 256
-        
-        return bytes(test_restored[:original_size])
-    except:
-        return b''
-
-
-def transform_14(self, data, repeat=255):
-    """Fixed pattern transform: Simple byte-level patterns, 100% lossless."""
-    if not data:
-        logging.warning("transform_14: Empty input, returning minimal output")
-        return struct.pack('>B', 0)  # No transformation marker
-    
-    original_size = len(data)
-    if original_size > 2**16 - 1:  # Limit for metadata
-        logging.warning(f"transform_14: Data too large ({original_size} bytes), using no-op")
-        return struct.pack('>H', original_size) + data
-    
-    transformed = bytearray(data)
-    patterns_applied = []  # Store exact positions and original values
-    
-    data_size_kb = original_size / 1024
-    max_iterations = min(10, max(1, int(data_size_kb * 2)))  # Conservative limit
-    
-    logging.info(f"transform_14: Processing {original_size} bytes, max {max_iterations} iterations")
-    
-    # Phase 1: Simple repeating byte pattern detection (AA, BB, CC, etc.)
-    for iteration in range(max_iterations):
-        new_patterns = 0
-        i = 0
-        
-        while i < len(transformed) - 1:
-            # Look for repeating byte patterns (byte[i] == byte[i+1])
-            if transformed[i] == transformed[i + 1]:
-                # Found pattern: store original next byte and transform it
-                original_next = transformed[i + 1]
-                pattern_pos = i + 1
-                
-                # Transform: XOR with position-derived value
-                xor_value = (pattern_pos * 37) % 256  # 37 is prime
-                transformed[pattern_pos] ^= xor_value
-                
-                # Store transformation info
-                patterns_applied.append((pattern_pos, xor_value, original_next))
-                new_patterns += 1
-                
-                # Skip the pattern
-                i += 2
-            else:
-                i += 1
-        
-        logging.debug(f"transform_14 iteration {iteration}: {new_patterns} patterns transformed")
-        if new_patterns == 0:  # No more patterns found
-            break
-    
-    # Phase 2: Pack metadata efficiently
-    num_patterns = len(patterns_applied)
-    
-    # Metadata format:
-    # Header: original_size(2B) + num_patterns(2B) + iterations(1B) = 5 bytes
-    # Per pattern: position(2B) + xor_value(1B) + original_byte(1B) = 4 bytes
-    metadata = struct.pack('>HHB', original_size, num_patterns, iteration + 1)
-    
-    # Pack pattern data
-    pattern_bytes = bytearray()
-    for pos, xor_val, orig_byte in patterns_applied:
-        pattern_bytes.extend(struct.pack('>HB B', pos, xor_val, orig_byte))
-    
-    # Create verification hash (first 4 bytes XORed)
-    verification = 0
-    for i in range(min(4, original_size)):
-        verification ^= data[i]
-    verification = struct.pack('>I', verification)
-    
-    # Final result
-    result = metadata + bytes(transformed) + pattern_bytes + verification
-    
-    # Self-test verification
-    test_result = self._test_reverse_transform_14(result)
-    if test_result != data:
-        logging.error("transform_14: Self-test failed! Reverting to no-op")
-        return struct.pack('>H', original_size) + data
-    
-    logging.info(f"transform_14: {num_patterns} patterns applied, result: {len(result)} bytes")
-    return result
-
-def reverse_transform_14(self, data, repeat=255):
-    """Fixed reverse pattern transform: Perfect reconstruction."""
-    if len(data) < 9:  # Need header(5B) + verification(4B)
-        logging.warning("reverse_transform_14: Data too short, returning original")
-        return data[5:] if len(data) > 5 else b''
-    
-    try:
-        # Extract header
-        header = data[:5]
-        original_size, num_patterns, iterations_used = struct.unpack('>HHB', header)
-        
-        if original_size == 0:
-            logging.warning("reverse_transform_14: Original size is 0")
-            return b''
-        
-        # Calculate positions
-        header_end = 5
-        pattern_data_end = header_end + num_patterns * 4
-        verification_start = pattern_data_end
-        verification_end = verification_start + 4
-        
-        if len(data) < verification_end:
-            logging.error("reverse_transform_14: Insufficient data for metadata")
-            return b''
-        
-        # Extract components
-        transformed_start = header_end
-        transformed_end = transformed_start + original_size
-        
-        if len(data) < transformed_end:
-            logging.error("reverse_transform_14: Insufficient transformed data")
-            return b''
-        
-        transformed = bytearray(data[transformed_start:transformed_end])
-        pattern_bytes = data[header_end:pattern_data_end]
-        verification = data[verification_end:verification_end + 4]
-        
-        # Parse pattern data
-        patterns_applied = []
-        for i in range(0, len(pattern_bytes), 4):
-            if i + 3 < len(pattern_bytes):
-                pos, xor_val, orig_byte = struct.unpack('>HBB', pattern_bytes[i:i+4])
-                if 0 <= pos < original_size:
-                    patterns_applied.append((pos, xor_val, orig_byte))
-        
-        # Verify we have expected number of patterns
-        if len(patterns_applied) != num_patterns:
-            logging.warning(f"reverse_transform_14: Pattern count mismatch: {len(patterns_applied)} != {num_patterns}")
-            num_patterns = len(patterns_applied)
-        
-        # Verify integrity with hash
-        computed_verification = 0
-        for i in range(original_size):
-            computed_verification ^= transformed[i]
-        stored_verification = struct.unpack('>I', verification)[0]
-        
-        if computed_verification != stored_verification:
-            logging.warning("reverse_transform_14: Verification hash mismatch, proceeding anyway")
-        
-        # Reverse transformations in exact reverse order
-        restored = bytearray(transformed)
-        
-        for pattern_idx in range(num_patterns - 1, -1, -1):
-            if pattern_idx < len(patterns_applied):
-                pos, xor_val, orig_byte = patterns_applied[pattern_idx]
+        try:
+            # Extract metadata
+            metadata = data[:7]
+            cycles, effective_repeat, original_size = struct.unpack('>BBI', metadata)
+            
+            if original_size == 0:
+                logging.warning("reverse_transform_13: Original size is 0")
+                return b''
+            
+            # Extract transformed data
+            transformed_data_start = 7
+            transformed_data_end = transformed_data_start + original_size
+            
+            if len(data) < transformed_data_end:
+                logging.error("reverse_transform_13: Insufficient data length")
+                return b''
+            
+            transformed = bytearray(data[transformed_data_start:transformed_data_end])
+            
+            # Extract adjustment data
+            adjustment_bytes = data[transformed_data_end:]
+            num_adjustments = len(adjustment_bytes) // 3
+            
+            # Parse adjustments
+            adjustments = []
+            for i in range(0, len(adjustment_bytes), 3):
+                if i + 2 < len(adjustment_bytes):
+                    pos, adjustment = struct.unpack('>HB', adjustment_bytes[i:i+3])
+                    if 0 <= pos < original_size:
+                        adjustments.append((pos, adjustment))
+            
+            # Apply reverse adjustments in exact reverse order
+            restored = bytearray(transformed)
+            
+            # Process adjustments in reverse chronological order
+            for adjustment_idx in range(len(adjustments) - 1, -1, -1):
+                pos, adjustment = adjustments[adjustment_idx]
                 if 0 <= pos < len(restored):
-                    # Reverse the XOR
-                    restored[pos] ^= xor_val
-                    # Verify it matches original (optional strict check)
-                    if restored[pos] != orig_byte:
-                        logging.warning(f"reverse_transform_14: Pattern verification failed at pos {pos}")
-                        # Force correct value
-                        restored[pos] = orig_byte
-        
-        # Trim to exact original size
-        result = bytes(restored[:original_size])
-        
-        # Final size verification
-        if len(result) != original_size:
-            logging.error(f"reverse_transform_14: Final size mismatch: {len(result)} != {original_size}")
+                    restored[pos] = (restored[pos] + adjustment) % 256
+            
+            # Verify reconstruction
+            if len(restored) != original_size:
+                logging.error(f"reverse_transform_13: Size mismatch: {len(restored)} != {original_size}")
+                return b''
+            
+            logging.info(f"reverse_transform_13: Restored {original_size} bytes using {len(adjustments)} adjustments")
+            return bytes(restored)
+            
+        except struct.error as e:
+            logging.error(f"reverse_transform_13: Metadata parsing failed: {e}")
             return b''
+        except Exception as e:
+            logging.error(f"reverse_transform_13: Unexpected error: {e}")
+            return b''
+
+    def _test_reverse_transform_13(self, transformed_data):
+        """Internal test function to verify lossless reconstruction."""
+        try:
+            # Extract metadata for testing
+            if len(transformed_data) < 7:
+                return b''
+            
+            metadata = transformed_data[:7]
+            cycles, effective_repeat, original_size = struct.unpack('>BBI', metadata)
+            
+            transformed_start = 7
+            transformed_end = transformed_start + original_size
+            if len(transformed_data) < transformed_end:
+                return b''
+            
+            transformed = bytearray(transformed_data[transformed_start:transformed_end])
+            adjustment_bytes = transformed_data[transformed_end:]
+            
+            # Parse adjustments
+            adjustments = []
+            for i in range(0, len(adjustment_bytes), 3):
+                if i + 2 < len(adjustment_bytes):
+                    pos, adjustment = struct.unpack('>HB', adjustment_bytes[i:i+3])
+                    if 0 <= pos < original_size:
+                        adjustments.append((pos, adjustment))
+            
+            # Test reconstruction
+            test_restored = bytearray(transformed)
+            for adjustment_idx in range(len(adjustments) - 1, -1, -1):
+                pos, adjustment = adjustments[adjustment_idx]
+                if 0 <= pos < len(test_restored):
+                    test_restored[pos] = (test_restored[pos] + adjustment) % 256
+            
+            return bytes(test_restored[:original_size])
+        except:
+            return b''
+
+    def transform_14(self, data, repeat=255):
+        """Fixed pattern transform: Simple byte-level patterns, 100% lossless."""
+        if not data:
+            logging.warning("transform_14: Empty input, returning minimal output")
+            return struct.pack('>B', 0)  # No transformation marker
         
-        logging.info(f"reverse_transform_14: Successfully restored {original_size} bytes using {num_patterns} patterns")
+        original_size = len(data)
+        if original_size > 2**16 - 1:  # Limit for metadata
+            logging.warning(f"transform_14: Data too large ({original_size} bytes), using no-op")
+            return struct.pack('>H', original_size) + data
+        
+        transformed = bytearray(data)
+        patterns_applied = []  # Store exact positions and original values
+        
+        data_size_kb = original_size / 1024
+        max_iterations = min(10, max(1, int(data_size_kb * 2)))  # Conservative limit
+        
+        logging.info(f"transform_14: Processing {original_size} bytes, max {max_iterations} iterations")
+        
+        # Phase 1: Simple repeating byte pattern detection (AA, BB, CC, etc.)
+        for iteration in range(max_iterations):
+            new_patterns = 0
+            i = 0
+            
+            while i < len(transformed) - 1:
+                # Look for repeating byte patterns (byte[i] == byte[i+1])
+                if transformed[i] == transformed[i + 1]:
+                    # Found pattern: store original next byte and transform it
+                    original_next = transformed[i + 1]
+                    pattern_pos = i + 1
+                    
+                    # Transform: XOR with position-derived value
+                    xor_value = (pattern_pos * 37) % 256  # 37 is prime
+                    transformed[pattern_pos] ^= xor_value
+                    
+                    # Store transformation info
+                    patterns_applied.append((pattern_pos, xor_value, original_next))
+                    new_patterns += 1
+                    
+                    # Skip the pattern
+                    i += 2
+                else:
+                    i += 1
+            
+            logging.debug(f"transform_14 iteration {iteration}: {new_patterns} patterns transformed")
+            if new_patterns == 0:  # No more patterns found
+                break
+        
+        # Phase 2: Pack metadata efficiently
+        num_patterns = len(patterns_applied)
+        
+        # Metadata format:
+        # Header: original_size(2B) + num_patterns(2B) + iterations(1B) = 5 bytes
+        # Per pattern: position(2B) + xor_value(1B) + original_byte(1B) = 4 bytes
+        metadata = struct.pack('>HHB', original_size, num_patterns, iteration + 1)
+        
+        # Pack pattern data
+        pattern_bytes = bytearray()
+        for pos, xor_val, orig_byte in patterns_applied:
+            pattern_bytes.extend(struct.pack('>HBB', pos, xor_val, orig_byte))
+        
+        # Create verification hash (first 4 bytes XORed)
+        verification = 0
+        for i in range(min(4, original_size)):
+            verification ^= data[i]
+        verification = struct.pack('>I', verification)
+        
+        # Final result
+        result = metadata + bytes(transformed) + pattern_bytes + verification
+        
+        # Self-test verification
+        test_result = self._test_reverse_transform_14(result)
+        if test_result != data:
+            logging.error("transform_14: Self-test failed! Reverting to no-op")
+            return struct.pack('>H', original_size) + data
+        
+        logging.info(f"transform_14: {num_patterns} patterns applied, result: {len(result)} bytes")
         return result
-        
-    except struct.error as e:
-        logging.error(f"reverse_transform_14: Metadata parsing failed: {e}")
-        return b''
-    except Exception as e:
-        logging.error(f"reverse_transform_14: Unexpected error: {e}")
-        return b''
 
-def _test_reverse_transform_14(self, transformed_data):
-    """Internal test function to verify lossless reconstruction."""
-    try:
-        if len(transformed_data) < 9:
+    def reverse_transform_14(self, data, repeat=255):
+        """Fixed reverse pattern transform: Perfect reconstruction."""
+        if len(data) < 9:  # Need header(5B) + verification(4B)
+            logging.warning("reverse_transform_14: Data too short, returning original")
+            return data[5:] if len(data) > 5 else b''
+        
+        try:
+            # Extract header
+            header = data[:5]
+            original_size, num_patterns, iterations_used = struct.unpack('>HHB', header)
+            
+            if original_size == 0:
+                logging.warning("reverse_transform_14: Original size is 0")
+                return b''
+            
+            # Calculate positions
+            header_end = 5
+            pattern_data_end = header_end + num_patterns * 4
+            verification_start = pattern_data_end
+            verification_end = verification_start + 4
+            
+            if len(data) < verification_end:
+                logging.error("reverse_transform_14: Insufficient data for metadata")
+                return b''
+            
+            # Extract components
+            transformed_start = header_end
+            transformed_end = transformed_start + original_size
+            
+            if len(data) < transformed_end:
+                logging.error("reverse_transform_14: Insufficient transformed data")
+                return b''
+            
+            transformed = bytearray(data[transformed_start:transformed_end])
+            pattern_bytes = data[header_end:pattern_data_end]
+            verification = data[verification_end:verification_end + 4]
+            
+            # Parse pattern data
+            patterns_applied = []
+            for i in range(0, len(pattern_bytes), 4):
+                if i + 3 < len(pattern_bytes):
+                    pos, xor_val, orig_byte = struct.unpack('>HBB', pattern_bytes[i:i+4])
+                    if 0 <= pos < original_size:
+                        patterns_applied.append((pos, xor_val, orig_byte))
+            
+            # Verify we have expected number of patterns
+            if len(patterns_applied) != num_patterns:
+                logging.warning(f"reverse_transform_14: Pattern count mismatch: {len(patterns_applied)} != {num_patterns}")
+                num_patterns = len(patterns_applied)
+            
+            # Verify integrity with hash
+            computed_verification = 0
+            for i in range(original_size):
+                computed_verification ^= transformed[i]
+            stored_verification = struct.unpack('>I', verification)[0]
+            
+            if computed_verification != stored_verification:
+                logging.warning("reverse_transform_14: Verification hash mismatch, proceeding anyway")
+            
+            # Reverse transformations in exact reverse order
+            restored = bytearray(transformed)
+            
+            for pattern_idx in range(num_patterns - 1, -1, -1):
+                if pattern_idx < len(patterns_applied):
+                    pos, xor_val, orig_byte = patterns_applied[pattern_idx]
+                    if 0 <= pos < len(restored):
+                        # Reverse the XOR
+                        restored[pos] ^= xor_val
+                        # Verify it matches original (optional strict check)
+                        if restored[pos] != orig_byte:
+                            logging.warning(f"reverse_transform_14: Pattern verification failed at pos {pos}")
+                            # Force correct value
+                            restored[pos] = orig_byte
+            
+            # Trim to exact original size
+            result = bytes(restored[:original_size])
+            
+            # Final size verification
+            if len(result) != original_size:
+                logging.error(f"reverse_transform_14: Final size mismatch: {len(result)} != {original_size}")
+                return b''
+            
+            logging.info(f"reverse_transform_14: Successfully restored {original_size} bytes using {num_patterns} patterns")
+            return result
+            
+        except struct.error as e:
+            logging.error(f"reverse_transform_14: Metadata parsing failed: {e}")
             return b''
-        
-        # Extract header for testing
-        header = transformed_data[:5]
-        original_size, num_patterns, iterations_used = struct.unpack('>HHB', header)
-        
-        if original_size == 0:
+        except Exception as e:
+            logging.error(f"reverse_transform_14: Unexpected error: {e}")
             return b''
-        
-        header_end = 5
-        pattern_data_end = header_end + num_patterns * 4
-        if len(transformed_data) < pattern_data_end + 4:
-            return b''
-        
-        transformed_start = header_end
-        transformed_end = transformed_start + original_size
-        if len(transformed_data) < transformed_end:
-            return b''
-        
-        transformed = bytearray(transformed_data[transformed_start:transformed_end])
-        pattern_bytes = transformed_data[header_end:pattern_data_end]
-        
-        # Parse patterns
-        patterns_applied = []
-        for i in range(0, len(pattern_bytes), 4):
-            if i + 3 < len(pattern_bytes):
-                pos, xor_val, orig_byte = struct.unpack('>HBB', pattern_bytes[i:i+4])
-                if 0 <= pos < original_size:
-                    patterns_applied.append((pos, xor_val, orig_byte))
-        
-        # Test reconstruction
-        test_restored = bytearray(transformed)
-        for pattern_idx in range(len(patterns_applied) - 1, -1, -1):
-            pos, xor_val, orig_byte = patterns_applied[pattern_idx]
-            if 0 <= pos < len(test_restored):
-                test_restored[pos] ^= xor_val
-                # Ensure it matches original stored value
-                if test_restored[pos] != orig_byte:
-                    test_restored[pos] = orig_byte
-        
-        return bytes(test_restored[:original_size])
-    except:
-        return b''
-    
 
-    
+    def _test_reverse_transform_14(self, transformed_data):
+        """Internal test function to verify lossless reconstruction."""
+        try:
+            if len(transformed_data) < 9:
+                return b''
+            
+            # Extract header for testing
+            header = transformed_data[:5]
+            original_size, num_patterns, iterations_used = struct.unpack('>HHB', header)
+            
+            if original_size == 0:
+                return b''
+            
+            header_end = 5
+            pattern_data_end = header_end + num_patterns * 4
+            if len(transformed_data) < pattern_data_end + 4:
+                return b''
+            
+            transformed_start = header_end
+            transformed_end = transformed_start + original_size
+            if len(transformed_data) < transformed_end:
+                return b''
+            
+            transformed = bytearray(transformed_data[transformed_start:transformed_end])
+            pattern_bytes = transformed_data[header_end:pattern_data_end]
+            
+            # Parse patterns
+            patterns_applied = []
+            for i in range(0, len(pattern_bytes), 4):
+                if i + 3 < len(pattern_bytes):
+                    pos, xor_val, orig_byte = struct.unpack('>HBB', pattern_bytes[i:i+4])
+                    if 0 <= pos < original_size:
+                        patterns_applied.append((pos, xor_val, orig_byte))
+            
+            # Test reconstruction
+            test_restored = bytearray(transformed)
+            for pattern_idx in range(len(patterns_applied) - 1, -1, -1):
+                pos, xor_val, orig_byte = patterns_applied[pattern_idx]
+                if 0 <= pos < len(test_restored):
+                    test_restored[pos] ^= xor_val
+                    # Ensure it matches original stored value
+                    if test_restored[pos] != orig_byte:
+                        test_restored[pos] = orig_byte
+            
+            return bytes(test_restored[:original_size])
+        except:
+            return b''
+
     def transform_15(self, data, repeat=100):
         """XOR data with a value derived from current time and a prime number."""
         if not data:
@@ -1610,9 +1607,7 @@ def _test_reverse_transform_14(self, transformed_data):
             return bytes([0]) + data
 
         logging.info(f"Best method: {best_method}, Marker: {best_marker} for {filetype.name} in {mode} mode")
-        return bytes([best_marker]) + best_compressed
-
-    def decompress_with_best_method(self, data):
+        return bytes([best_marker]) +     def decompress_with_best_method(self, data):
         """Decompress data based on marker."""
         if len(data) < 1:
             logging.warning("decompress_with_best_method: Insufficient data")
@@ -1709,6 +1704,75 @@ def _test_reverse_transform_14(self, transformed_data):
         except Exception as e:
             logging.error(f"Decompression failed for {input_file}: {e}")
             return False
+
+    def generate_transform_method(self, transform_id: int):
+        """Generate dynamic transformation methods for IDs 16-255."""
+        def transform_dynamic(data, repeat=100):
+            """Dynamic transformation based on transform_id."""
+            if not data:
+                return b''
+            transformed = bytearray(data)
+            data_size = len(data)
+            # Use transform_id as seed for deterministic transformation
+            seed = transform_id * 17  # 17 is prime
+            random.seed(seed)
+            
+            # Generate a simple substitution table based on transform_id
+            substitution = list(range(256))
+            random.shuffle(substitution)
+            
+            # Apply transformation with repeat cycles
+            for _ in range(min(repeat, 10)):  # Limit cycles
+                for i in range(data_size):
+                    # Combine position-based and transform_id-based transformation
+                    pos_factor = (i * transform_id) % 256
+                    transformed[i] = (substitution[transformed[i]] ^ pos_factor) % 256
+            
+            # Store minimal metadata: transform_id (1B) + repeat (1B)
+            metadata = struct.pack('>BB', transform_id, min(repeat, 255))
+            return metadata + bytes(transformed)
+        
+        def reverse_transform_dynamic(data, repeat=100):
+            """Reverse dynamic transformation."""
+            if len(data) < 2:
+                return data[2:] if len(data) > 2 else b''
+            
+            try:
+                transform_id, stored_repeat = struct.unpack('>BB', data[:2])
+                transformed_data = data[2:]
+                
+                if not transformed_data:
+                    return b''
+                
+                # Reconstruct the same substitution table
+                seed = transform_id * 17
+                random.seed(seed)
+                substitution = list(range(256))
+                random.shuffle(substitution)
+                
+                # Create reverse substitution
+                reverse_sub = [0] * 256
+                for i, v in enumerate(substitution):
+                    reverse_sub[v] = i
+                
+                restored = bytearray(transformed_data)
+                data_size = len(transformed_data)
+                effective_repeat = min(stored_repeat, 10)
+                
+                # Reverse the transformation (apply in reverse order)
+                for _ in range(effective_repeat):
+                    for i in range(data_size):
+                        pos_factor = (i * transform_id) % 256
+                        # Reverse the XOR and substitution
+                        temp = (restored[i] ^ pos_factor) % 256
+                        restored[i] = reverse_sub[temp]
+                
+                return bytes(restored)
+            except Exception as e:
+                logging.error(f"Dynamic reverse transform failed for ID {transform_id}: {e}")
+                return data[2:]  # Return transformed data as fallback
+        
+        return transform_dynamic, reverse_transform_dynamic
 
 # === Main Function ===
 def detect_filetype(filename: str) -> Filetype:
