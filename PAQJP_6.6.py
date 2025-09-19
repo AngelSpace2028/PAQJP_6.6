@@ -26,7 +26,6 @@ HUFFMAN_THRESHOLD = 1024  # Bytes threshold for Huffman vs. PAQ compression
 PI_DIGITS_FILE = "pi_digits.txt"
 PRIMES = [p for p in range(2, 256) if all(p % d != 0 for d in range(2, int(p**0.5)+1))]
 MEM = 1 << 15  # 32,768
-MAX_BITS = 2**28  # Maximum bits for transform_14
 MIN_BITS = 2      # Minimum bits for transform_14
 
 # === Dictionary file list ===
@@ -904,69 +903,6 @@ class PAQJPCompressor:
 
         return bytes(transformed)
 
-    def transform_11(self, data, repeat=100):
-        """Test multiple y values for best compression."""
-        if not data:
-            logging.warning("transform_11: Empty input, returning y=0 with no data")
-            return struct.pack('B', 0)
-        y_values = list(range(1, 256, 5))  # Test every 5th value to speed up
-        best_result = None
-        best_y = None
-        best_size = float('inf')
-        zero_count = sum(1 for b in data if b == 0)
-        logging.info(f"transform_11: Testing {len(y_values)} y values for {len(data)} bytes, {zero_count} zeros")
-        for y in y_values:
-            transformed = bytearray(data)
-            for _ in range(repeat):
-                for i in range(len(transformed)):
-                    transformed[i] = (transformed[i] + y + 1) % 256
-            transformed = bytes(transformed)
-            try:
-                compressed = self.paq_compress(transformed)
-                if compressed is None:
-                    logging.warning(f"transform_11: Compression with y={y} failed")
-                    continue
-                if len(compressed) < best_size:
-                    best_result = compressed
-                    best_y = y
-                    best_size = len(compressed)
-            except Exception as e:
-                logging.warning(f"transform_11: Compression with y={y} failed: {e}")
-                continue
-        if best_result is None:
-            logging.error("transform_11: All compression failed, returning original with y=0")
-            return struct.pack('B', 0) + data
-        logging.info(f"transform_11: Selected y={best_y}, compressed size {best_size}")
-        return struct.pack('B', best_y) + best_result
-
-    def reverse_transform_11(self, data, repeat=100):
-        """Reverse transform_11."""
-        if len(data) < 1:
-            logging.warning("reverse_transform_11: Data too short, returning empty bytes")
-            return b''
-        y = struct.unpack('B', data[:1])[0]
-        compressed_data = data[1:]
-        if not compressed_data:
-            logging.warning("reverse_transform_11: No compressed data, returning empty bytes")
-            return b''
-        try:
-            decompressed = self.paq_decompress(compressed_data)
-            if not decompressed:
-                logging.warning("reverse_transform_11: Decompression empty")
-                return b''
-        except Exception as e:
-            logging.error(f"reverse_transform_11: Decompression failed: {e}")
-            return b''
-        transformed = bytearray(decompressed)
-        zero_count = sum(1 for b in transformed if b == 0)
-        logging.info(f"reverse_transform_11: {len(transformed)} bytes, y={y}, {zero_count} zeros")
-        for _ in range(repeat):
-            for i in range(len(transformed)):
-                transformed[i] = (transformed[i] - y - 1) % 256
-        zero_count_after = sum(1 for b in transformed if b == 0)
-        logging.info(f"reverse_transform_11: Restored, {zero_count_after} zeros")
-        return bytes(transformed)
-
     def transform_12(self, data, repeat=100):
         """XOR with Fibonacci sequence."""
         if not data:
@@ -1003,230 +939,6 @@ class PAQJPCompressor:
         
         return bytes(transformed)
 
-    def transform_13(self, data, repeat=100):
-        """Subtract StateTable values from bytes, handle underflow/overflow, append table value on underflow."""
-        if not data:
-            logging.warning("transform_13: Empty input, returning empty bytes")
-            return b''
-        transformed = bytearray(data)
-        table = self.state_table.table  # Empty table, no effect
-        table_length = len(table)
-        appended_bytes = bytearray()
-        data_size_kb = len(data) / 1024
-        cycles = min(10, max(1, int(data_size_kb)))
-        logging.info(f"transform_13: {cycles} cycles, {repeat} repeats for {len(data)} bytes")
-
-        for _ in range(cycles * repeat // 10):
-            for i in range(len(transformed)):
-                table_value = 0 if not table else table[i % table_length][0]  # Default to 0 with empty table
-                result = transformed[i] - table_value
-                if result < 0:
-                    result += 256
-                    appended_bytes.append(table_value)
-                elif result > 255:
-                    result -= 255
-                transformed[i] = result % 256
-
-        result = bytes(transformed) + appended_bytes
-        logging.info(f"transform_13: Added {len(appended_bytes)} bytes to output, total {len(result)} bytes")
-        return result
-
-    def reverse_transform_13(self, data, repeat=100):
-        """Reverse transform_13 by adding StateTable values, accounting for appended bytes."""
-        if not data:
-            logging.warning("reverse_transform_13: Empty input, returning empty bytes")
-            return b''
-        transformed = bytearray(data)
-        table = self.state_table.table  # Empty table, no effect
-        table_length = len(table)
-        data_size_kb = len(data) / 1024
-        cycles = min(10, max(1, int(data_size_kb)))
-        logging.info(f"reverse_transform_13: {cycles} cycles, {repeat} repeats for {len(data)} bytes")
-
-        appended_count = 0
-        underflow_positions = []
-        temp_transformed = bytearray(transformed)
-
-        for _ in range(cycles * repeat // 10):
-            for i in range(len(data)):
-                if i >= len(temp_transformed):
-                    break
-                table_value = 0 if not table else table[i % table_length][0]  # Default to 0 with empty table
-                original = temp_transformed[i]
-                result = original - table_value
-                if result < 0:
-                    underflow_positions.append((i, table_value))
-                    appended_count += 1
-
-        original_length = len(data) - appended_count
-        if original_length < 0:
-            logging.error("reverse_transform_13: Invalid appended byte count")
-            return b''
-        transformed = transformed[:original_length]
-
-        for _ in range(cycles * repeat // 10):
-            for i in range(len(transformed)):
-                table_value = 0 if not table else table[i % table_length][0]  # Default to 0 with empty table
-                result = transformed[i]
-                if (i, table_value) in underflow_positions:
-                    result = (result + table_value - 256) % 256
-                else:
-                    result = (result + table_value) % 256
-                    if result > 255:
-                        result += 255
-                transformed[i] = result % 256
-
-        logging.info(f"reverse_transform_13: Restored {len(transformed)} bytes, estimated {appended_count} appended bytes")
-        return bytes(transformed)
-
-    def transform_14(self, data, repeat=255):
-        """Transform data by processing '01' and '0000'/'1111' patterns."""
-        if not data:
-            logging.warning("transform_14: Empty input, returning minimal output")
-            return struct.pack('B', 0)
-        
-        # Convert bytes to binary string
-        binary_str = bin(int.from_bytes(data, 'big'))[2:].zfill(len(data) * 8)
-        bit_length = len(binary_str)
-        if bit_length < MIN_BITS or bit_length > MAX_BITS:
-            logging.warning(f"transform_14: Input size {bit_length} bits out of range [{MIN_BITS}, {MAX_BITS}]")
-            return struct.pack('B', 0) + data
-        
-        # Determine cycles based on data size
-        data_size_kb = len(data) / 1024
-        max_cycles = min(255, max(1, int(data_size_kb)))
-        
-        # Select XOR bit based on prime
-        prime_index = len(data) % len(self.PRIMES)
-        xor_bit = '1' if self.PRIMES[prime_index] % 2 == 0 else '0'
-        
-        # Process "01" patterns
-        output_bits = list(binary_str)
-        iteration_count = 0
-        for _ in range(max_cycles):
-            temp_bits = []
-            i = 0
-            modified = False
-            while i < len(output_bits) - 2:
-                if output_bits[i:i+2] == ['0', '1']:
-                    temp_bits.extend(['0', '1'])
-                    next_bit = output_bits[i+2]
-                    temp_bits.append('0' if next_bit == xor_bit else '1')
-                    modified = True
-                    i += 3
-                else:
-                    temp_bits.append(output_bits[i])
-                    i += 1
-            temp_bits.extend(output_bits[i:])
-            output_bits = temp_bits
-            iteration_count += 1
-            if not modified or len(''.join(output_bits)) // 8 >= 32:
-                break
-        
-        # Process 4-bit patterns ("0000" or "1111") with StateTable
-        if len(output_bits) >= 4:
-            i = 0
-            while i < len(output_bits) - 4:
-                pattern_4 = ''.join(output_bits[i:i+4])
-                pattern_val = int(pattern_4, 2)
-                if pattern_val in [0b0000, 0b1111] and i + 4 < len(output_bits):
-                    state_value = 0  # Default to 0 with empty table
-                    output_bits[i + 4] = '0' if output_bits[i + 4] == str(state_value) else '1'
-                    i += 5
-                else:
-                    i += 1
-        
-        # Convert back to bytes
-        bit_str = ''.join(output_bits)
-        byte_length = (len(bit_str) + 7) // 8
-        result = int(bit_str, 2).to_bytes(byte_length, 'big') if bit_str else b''
-        padding = struct.pack('B', min(iteration_count, 255))
-        
-        logging.info(f"transform_14: Compressed {bit_length} bits to {len(result)} bytes, iterations {iteration_count}")
-        return result + padding
-
-    def reverse_transform_14(self, data, repeat=255):
-        """Reverse transform_14 by undoing '01' and '0000'/'1111' pattern processing."""
-        if len(data) < 1:
-            logging.warning("reverse_transform_14: Empty input, returning empty bytes")
-            return b''
-        
-        # Extract iteration count and data
-        iteration_count = min(struct.unpack('B', data[-1:])[0], 255)
-        data = data[:-1]
-        if not data:
-            logging.warning("reverse_transform_14: No data after padding, returning empty bytes")
-            return b''
-        
-        # Convert to binary string
-        binary_str = bin(int.from_bytes(data, 'big'))[2:].zfill(len(data) * 8)
-        bit_length = len(binary_str)
-        if bit_length < MIN_BITS or bit_length > MAX_BITS:
-            logging.warning(f"reverse_transform_14: Input size {bit_length} bits out of range [{MIN_BITS}, {MAX_BITS}]")
-            return data
-        
-        # Determine cycles and XOR bit
-        data_size_kb = len(data) / 1024
-        max_cycles = min(iteration_count, max(1, int(data_size_kb)))
-        prime_index = (len(data) + 1) % len(self.PRIMES)
-        xor_bit = '1' if self.PRIMES[prime_index] % 2 == 0 else '0'
-        
-        # Reverse 4-bit pattern processing
-        output_bits = list(binary_str)
-        if len(output_bits) >= 4:
-            i = 0
-            while i < len(output_bits) - 4:
-                pattern_4 = ''.join(output_bits[i:i+4])
-                pattern_val = int(pattern_4, 2)
-                if pattern_val in [0b0000, 0b1111] and i + 4 < len(output_bits):
-                    state_value = 0  # Default to 0 with empty table
-                    output_bits[i + 4] = '0' if output_bits[i + 4] == str(state_value) else '1'
-                    i += 5
-                else:
-                    i += 1
-        
-        # Reverse "01" pattern processing
-        for _ in range(max_cycles):
-            temp_bits = []
-            i = 0
-            while i < len(output_bits) - 2:
-                if output_bits[i:i+2] == ['0', '1']:
-                    temp_bits.extend(['0', '1'])
-                    next_bit = output_bits[i+2]
-                    temp_bits.append('0' if next_bit == xor_bit else '1')
-                    i += 3
-                else:
-                    temp_bits.append(output_bits[i])
-                    i += 1
-            temp_bits.extend(output_bits[i:])
-            output_bits = temp_bits
-        
-        # Convert back to bytes
-        bit_str = ''.join(output_bits)
-        byte_length = (len(bit_str) + 7) // 8
-        result = int(bit_str, 2).to_bytes(byte_length, 'big') if bit_str else b''
-        
-        logging.info(f"reverse_transform_14: Extracted {bit_length} bits to {len(result)} bytes, iterations {iteration_count}")
-        return result
-
-    def generate_transform_method(self, n):
-        """Generate transform and reverse transform methods for n >= 15."""
-        def transform(data, repeat=100):
-            if not data:
-                logging.warning(f"transform_{n}: Empty input, returning empty bytes")
-                return b''
-            transformed = bytearray(data)
-            seed_idx = n % len(self.seed_tables)
-            seed_value = self.get_seed(seed_idx, len(data))
-            for i in range(len(transformed)):
-                transformed[i] ^= seed_value
-            return bytes(transformed)
-
-        def reverse_transform(data, repeat=100):
-            return transform(data, repeat)
-
-        return transform, reverse_transform
-
     def transform_15(self, data, repeat=100):
         """XOR data with a value derived from current time and a prime number."""
         if not data:
@@ -1247,6 +959,24 @@ class PAQJPCompressor:
     def reverse_transform_15(self, data, repeat=100):
         """Reverse transform_15 (same as forward since XOR is symmetric)."""
         return self.transform_15(data, repeat=repeat)
+
+    def generate_transform_method(self, n):
+        """Generate transform and reverse transform methods for n >= 16."""
+        def transform(data, repeat=100):
+            if not data:
+                logging.warning(f"transform_{n}: Empty input, returning empty bytes")
+                return b''
+            transformed = bytearray(data)
+            seed_idx = n % len(self.seed_tables)
+            seed_value = self.get_seed(seed_idx, len(data))
+            for i in range(len(transformed)):
+                transformed[i] ^= seed_value
+            return bytes(transformed)
+
+        def reverse_transform(data, repeat=100):
+            return transform(data, repeat)
+
+        return transform, reverse_transform
 
     def compress_with_best_method(self, data, filetype, input_filename, mode="slow"):
         """Compress data using the best transformation method."""
@@ -1271,13 +1001,10 @@ class PAQJPCompressor:
             (8, self.transform_08),
             (9, self.transform_09),
             (12, self.transform_12),
-            (14, self.transform_14),
             (15, self.transform_15),  # Add transform_15
         ]
         slow_transformations = fast_transformations + [
             (10, self.transform_10),
-            
-            
         ] + [(i, self.generate_transform_method(i)[0]) for i in range(16, 256)]
 
         if is_dna:
@@ -1291,16 +1018,14 @@ class PAQJPCompressor:
                 (8, self.transform_08),
                 (9, self.transform_09),
                 (12, self.transform_12),
-                
-                
                 (15, self.transform_15),  # Add transform_15
             ]
             if is_dna:
                 prioritized = [(0, self.transform_genomecompress)] + prioritized
             if mode == "slow":
-                prioritized += [(10, self.transform_10), (11, self.transform_11)] + \
+                prioritized += [(10, self.transform_10)] + \
                               [(i, self.generate_transform_method(i)[0]) for i in range(16, 256)]
-            transformations = prioritized + [t for t in transformations if t[0] not in [0, 7, 8, 9, 10, 11, 12, 13, 14, 15] + list(range(16, 256))]
+            transformations = prioritized + [t for t in transformations if t[0] not in [0, 7, 8, 9, 10, 12, 15] + list(range(16, 256))]
 
         methods = [('paq', self.paq_compress)]
         best_compressed = None
@@ -1362,9 +1087,7 @@ class PAQJPCompressor:
             8: self.reverse_transform_08,
             9: self.reverse_transform_09,
             10: self.reverse_transform_10,
-           
             12: self.reverse_transform_12,
-           
             15: self.reverse_transform_15,  # Add reverse_transform_15
         }
         reverse_transforms.update({i: self.generate_transform_method(i)[1] for i in range(16, 256)})
