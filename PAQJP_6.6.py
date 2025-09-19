@@ -1277,7 +1277,7 @@ class PAQJPCompressor:
         slow_transformations = fast_transformations + [
             (10, self.transform_10),
             
-            (13, self.transform_13),
+            
         ] + [(i, self.generate_transform_method(i)[0]) for i in range(16, 256)]
 
         if is_dna:
