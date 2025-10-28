@@ -1,20 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-PAQJP_6.6 – ULTIMATE COMPRESSOR
-  • 252 REAL reversible transformations
-  • Auto-download & extract dictionaries from Google Drive (NO ERRORS)
-  • Full 256-state transition table
-  • PAQ9a + Huffman + DNA + Pi + Quantum
-  • Smart file-type detection
-  • CLI & Interactive Mode
-
-Install:
-    pip install paq qiskit mpmath requests
-"""
-
-# === IMPORTS ===
 import os
 import sys
 import math
@@ -46,98 +29,6 @@ PRIMES = [p for p in range(2, 256) if all(p % d != 0 for d in range(2, int(p**0.
 MEM = 1 << 15
 MIN_BITS = 2
 
-# === AUTO-DOWNLOAD DICTIONARIES (100% RELIABLE) ===
-DICTIONARY_URL = "https://drive.google.com/file/d/1u_1dCEl8hhdEug6GwkOxHAuSx_6_Pme9/view?usp=drivesdk"
-DICTIONARY_EXTRACTED: List[str] = []
-_MAX_RETRIES = 3
-
-def _get_confirm_token(response):
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            return value
-    return None
-
-def download_and_extract_dictionaries() -> None:
-    global DICTIONARY_EXTRACTED
-    if DICTIONARY_EXTRACTED:
-        logging.info("Dictionaries already loaded.")
-        return
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    zip_path = os.path.join(script_dir, "dictionaries.zip")
-    import requests
-    import zipfile
-    import time
-
-    logging.info("Downloading dictionaries from Google Drive...")
-    session = requests.Session()
-
-    for attempt in range(_MAX_RETRIES):
-        try:
-            response = session.get(DICTIONARY_URL, stream=True, timeout=60)
-            token = _get_confirm_token(response)
-
-            if token:
-                params = {'confirm': token, 'uuid': ''}
-                response = session.get(DICTIONARY_URL, params=params, stream=True, timeout=60)
-
-            content = response.content
-            if len(content) < 100 or b'PK' not in content[:10]:
-                raise ValueError("Downloaded file is not a ZIP (likely HTML)")
-
-            with open(zip_path, 'wb') as f:
-                f.write(content)
-            logging.info(f"Downloaded {len(content):,} bytes → {zip_path}")
-            break
-
-        except Exception as e:
-            logging.warning(f"Download attempt {attempt+1} failed: {e}")
-            if os.path.exists(zip_path):
-                os.remove(zip_path)
-            time.sleep(3)
-    else:
-        logging.error("All download attempts failed. Continuing without dictionaries.")
-        return
-
-    try:
-        with zipfile.ZipFile(zip_path) as z:
-            names = [n for n in z.namelist() if n.lower().startswith("dictionary.") and n.endswith(('.bin', '.txt'))]
-            if not names:
-                raise ValueError("No dictionary.* files found in ZIP")
-
-            for name in names:
-                dest = os.path.join(script_dir, name)
-                info = z.getinfo(name)
-
-                if os.path.exists(dest) and os.path.getsize(dest) == info.file_size:
-                    DICTIONARY_EXTRACTED.append(name)
-                    logging.info(f"Already up-to-date: {name}")
-                    continue
-
-                with z.open(name) as src, open(dest, 'wb') as dst:
-                    dst.write(src.read())
-                DICTIONARY_EXTRACTED.append(name)
-                logging.info(f"Extracted: {name}")
-
-        os.remove(zip_path)
-        logging.info("Dictionary extraction completed successfully.")
-
-    except zipfile.BadZipFile:
-        logging.error("Corrupted ZIP file. Removing and aborting.")
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
-        for n in DICTIONARY_EXTRACTED:
-            p = os.path.join(script_dir, n)
-            if os.path.exists(p):
-                os.remove(p)
-        DICTIONARY_EXTRACTED.clear()
-    except Exception as e:
-        logging.error(f"Extraction failed: {e}")
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
-
-download_and_extract_dictionaries()
-
 # === Dictionary Files ===
 DICTIONARY_FILES = [
     "words_enwik8.txt", "eng_news_2005_1M-sentences.txt", "eng_news_2005_1M-words.txt",
@@ -150,7 +41,7 @@ DICTIONARY_FILES = [
     "dictionary.7.bin", "dictionary.8.bin", "dictionary.9.bin", "dictionary.11.bin", 
     "dictionary.12.bin", "dictionary.13.bin", "dictionary.14.bin", "dictionary.15.bin",
     "dictionary.16.bin", "dictionary.19.bin",  "dictionary.20.bin"
-] + DICTIONARY_EXTRACTED
+]
 
 # === DNA Encoding Table ===
 DNA_ENCODING_TABLE = {
@@ -352,6 +243,147 @@ class StateTable:
             [140, 252, 0, 41]
         ]
 
+# === Smart Compressor ===
+class SmartCompressor:
+    def __init__(self):
+        self.dictionaries = self.load_dictionaries()
+
+    def load_dictionaries(self):
+        data = []
+        for filename in DICTIONARY_FILES:
+            if os.path.exists(filename):
+                try:
+                    with open(filename, "r", encoding="utf-8", errors="ignore") as f:
+                        data.append(f.read())
+                    logging.info(f"Loaded dictionary: {filename}")
+                except Exception as e:
+                    logging.warning(f"Could not read {filename}: {e}")
+            else:
+                logging.warning(f"Missing dictionary: {filename}")
+        return data
+
+    def compute_sha256(self, data):
+        return hashlib.sha256(data).hexdigest()
+
+    def compute_sha256_binary(self, data):
+        return hashlib.sha256(data).digest()
+
+    def find_hash_in_dictionaries(self, hash_hex):
+        for filename in DICTIONARY_FILES:
+            if not os.path.exists(filename):
+                continue
+            try:
+                with open(filename, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if hash_hex in line:
+                            logging.info(f"Hash {hash_hex[:16]}... found in {filename}")
+                            return filename
+            except Exception as e:
+                logging.warning(f"Error searching {filename}: {e}")
+        return None
+
+    def generate_8byte_sha(self, data):
+        try:
+            return hashlib.sha256(data).digest()[:8]
+        except Exception as e:
+            logging.error(f"Failed to generate SHA: {e}")
+            return None
+
+    def paq_compress(self, data):
+        if not data:
+            logging.warning("paq_compress: Empty input, returning empty bytes")
+            return b''
+        try:
+            if isinstance(data, bytearray):
+                data = bytes(data)
+            elif not isinstance(data, bytes):
+                raise TypeError(f"Expected bytes or bytearray, got {type(data)}")
+            compressed = paq.compress(data)
+            logging.info("PAQ9a compression complete")
+            return compressed
+        except Exception as e:
+            logging.error(f"PAQ9a compression failed: {e}")
+            return None
+
+    def paq_decompress(self, data):
+        if not data:
+            logging.warning("paq_decompress: Empty input, returning empty bytes")
+            return b''
+        try:
+            decompressed = paq.decompress(data)
+            logging.info("PAQ9a decompression complete")
+            return decompressed
+        except Exception as e:
+            logging.error(f"PAQ9a decompression failed: {e}")
+            return None
+
+    def reversible_transform(self, data):
+        logging.info("Applying XOR transform (0xAA)")
+        transformed = bytes(b ^ 0xAA for b in data)
+        logging.info("XOR transform complete")
+        return transformed
+
+    def reverse_reversible_transform(self, data):
+        logging.info("Reversing XOR transform (0xAA)")
+        return self.reversible_transform(data)
+
+    def compress(self, input_data, input_file):
+        if not input_data:
+            logging.warning("Empty input, returning minimal output")
+            return bytes([0])
+
+        original_hash = self.compute_sha256(input_data)
+        logging.info(f"SHA-256 of input: {original_hash[:16]}...")
+
+        found = self.find_hash_in_dictionaries(original_hash)
+        if found:
+            logging.info(f"Hash found in dictionary: {found}")
+        else:
+            logging.info("Hash not found, proceeding with compression")
+
+        if input_file.endswith(".paq") and any(x in input_file for x in ["words", "lines", "sentence"]):
+            sha = self.generate_8byte_sha(input_data)
+            if sha and len(input_data) > 8:
+                logging.info(f"SHA-8 for .paq file: {sha.hex()}")
+                return sha
+            logging.info("Original smaller than SHA, skipping compression")
+            return None
+
+        transformed = self.reversible_transform(input_data)
+        compressed = self.paq_compress(transformed)
+        if compressed is None:
+            logging.error("Compression failed")
+            return None
+
+        if len(compressed) < len(input_data):
+            output = self.compute_sha256_binary(input_data) + compressed
+            logging.info(f"Smart compression: Original {len(input_data)} bytes, Compressed {len(compressed)} bytes")
+            return output
+        else:
+            logging.info("Compression not efficient, returning None")
+            return None
+
+    def decompress(self, input_data):
+        if len(input_data) < 32:
+            logging.error("Input too short for Smart Compressor")
+            return None
+
+        stored_hash = input_data[:32]
+        compressed_data = input_data[32:]
+
+        decompressed = self.paq_decompress(compressed_data)
+        if decompressed is None:
+            return None
+
+        original = self.reverse_reversible_transform(decompressed)
+        computed_hash = self.compute_sha256_binary(original)
+        if computed_hash == stored_hash:
+            logging.info("Hash verification successful")
+            return original
+        else:
+            logging.error("Hash verification failed")
+            return None
+
 # === PAQJP Compressor ===
 class PAQJPCompressor:
     def __init__(self):
@@ -381,14 +413,18 @@ class PAQJPCompressor:
 
     def create_quantum_transform_circuit(self, transform_idx: int, data_length: int) -> qiskit.QuantumCircuit:
         """Define a 9-qubit quantum circuit for quantum-inspired transform (not executed)."""
-        circuit = qiskit.QuantumCircuit(9)
+        circuit = qiskit.QuantumCircuit(9)  # 9 qubits, no QuantumRegister
+        # Apply Hadamard to all qubits for superposition
         for i in range(9):
             circuit.h(i)
+        # Apply rotation based on transform_idx and data_length
         theta = (transform_idx * data_length) % 512 / 512 * math.pi
         for i in range(9):
             circuit.ry(theta, i)
+        # Add entanglement with CNOT gates
         for i in range(8):
             circuit.cx(i, i + 1)
+        # Circuit is not executed; used for quantum-inspired design
         logging.info(f"Defined quantum circuit for transform {transform_idx}, theta={theta:.2f}")
         return circuit
 
@@ -822,22 +858,26 @@ class PAQJPCompressor:
                 transformed[i] ^= fib_value
         return bytes(transformed)
 
+
     def generate_transform_method(self, n):
         """Generate transform and reverse transform for n >= 16, same as PAQJP_6.5 with Qiskit circuit definition."""
-        self.create_quantum_transform_circuit(n, 1048576)
+        # Define quantum circuit for inspiration (not executed)
+        self.create_quantum_transform_circuit(n, 1048576)  # Example data length for logging
         def transform(data, repeat=100):
             if not data:
                 logging.warning(f"transform_{n}: Empty input, returning empty bytes")
                 return b''
             transformed = bytearray(data)
-            seed_idx = n % len(self.seed_tables)
+            seed_idx = n % len(self.seed_tables)  # Same as PAQJP_6.5
             seed_value = self.get_seed(seed_idx, len(data))
             logging.info(f"transform_{n}: Using seed {seed_value} for seed_idx {seed_idx}")
             for i in range(len(transformed)):
                 transformed[i] ^= seed_value
             return bytes(transformed)
+
         def reverse_transform(data, repeat=100):
             return transform(data, repeat)
+
         return transform, reverse_transform
 
     def compress_with_best_method(self, data, filetype, input_filename, mode="slow"):
@@ -862,6 +902,7 @@ class PAQJPCompressor:
             (8, self.transform_08),
             (9, self.transform_09),
             (12, self.transform_12),
+            
         ]
         slow_transformations = fast_transformations + [
             (10, self.transform_10),
@@ -878,6 +919,7 @@ class PAQJPCompressor:
                 (8, self.transform_08),
                 (9, self.transform_09),
                 (12, self.transform_12),
+                
             ]
             if is_dna:
                 prioritized = [(0, self.transform_genomecompress)] + prioritized
@@ -946,6 +988,7 @@ class PAQJPCompressor:
             9: self.reverse_transform_09,
             10: self.reverse_transform_10,
             12: self.reverse_transform_12,
+            
         }
         reverse_transforms.update({i: self.generate_transform_method(i)[1] for i in range(16, 256)})
 
