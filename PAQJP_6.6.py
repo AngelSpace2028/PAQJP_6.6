@@ -94,7 +94,7 @@ def save_pi_digits(digits: List[int], filename: str = PI_DIGITS_FILE) -> bool:
         logging.error(f"Failed to save pi digits to {filename}: {e}")
         return False
 
-def load_pi_digits(filename: str = PI_DIGITS_FILE, expected_count: int = 3) -> Optional[List[int]]:
+def load_pi_digits(filename: str = PI_DIGITS_FILE, expected_count: int = 10000) -> Optional[List[int]]:
     try:
         if not os.path.isfile(filename):
             logging.warning(f"Pi digits file {filename} does not exist")
@@ -123,10 +123,10 @@ def load_pi_digits(filename: str = PI_DIGITS_FILE, expected_count: int = 3) -> O
         logging.error(f"Failed to load pi digits from {filename}: {e}")
         return None
 
-def generate_pi_digits(num_digits: int = 3, filename: str = PI_DIGITS_FILE) -> List[int]:
+def generate_pi_digits(num_digits: int = 10000, filename: str = PI_DIGITS_FILE) -> List[int]:
     try:
         from mpmath import mp
-        mp.dps = 20  # Sufficient precision for small num_digits
+        mp.dps = 10050  # Increased precision for 10,000 digits
         pi_str = str(mp.pi)
         raw_digits = [int(d) for d in pi_str[2:2 + num_digits]]
         if len(raw_digits) != num_digits:
@@ -137,18 +137,19 @@ def generate_pi_digits(num_digits: int = 3, filename: str = PI_DIGITS_FILE) -> L
         return mapped_digits
     except ImportError:
         logging.warning("mpmath not installed, using fallback pi digits")
-        fallback_digits = [1, 4, 1]
+        fallback_digits = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3] + [0] * (num_digits - 10)
         mapped_fallback = [(d * 255 // 9) % 256 for d in fallback_digits[:num_digits]]
         save_pi_digits(mapped_fallback, filename)
         return mapped_fallback
     except Exception as e:
         logging.error(f"Failed to generate pi digits: {e}")
-        fallback_digits = [1, 4, 1]
+        fallback_digits = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3] + [0] * (num_digits - 10)
         mapped_fallback = [(d * 255 // 9) % 256 for d in fallback_digits[:num_digits]]
         save_pi_digits(mapped_fallback, filename)
         return mapped_fallback
 
-PI_DIGITS = generate_pi_digits(3)
+# Generate 10,000 digits of Pi
+PI_DIGITS = generate_pi_digits(10000)
 
 # === Helper Classes and Functions ===
 class Filetype(Enum):
@@ -476,18 +477,14 @@ class PAQJPCompressor:
             logging.warning("qiskit not available, skipping quantum circuit definition")
             return
         try:
-            circuit = qiskit.QuantumCircuit(9)  # 9 qubits, no QuantumRegister
-            # Apply Hadamard to all qubits for superposition
+            circuit = qiskit.QuantumCircuit(9)
             for i in range(9):
                 circuit.h(i)
-            # Apply rotation based on transform_idx and data_length
             theta = (transform_idx * data_length) % 512 / 512 * math.pi
             for i in range(9):
                 circuit.ry(theta, i)
-            # Add entanglement with CNOT gates
             for i in range(8):
                 circuit.cx(i, i + 1)
-            # Circuit is not executed; used for quantum-inspired design
             logging.info(f"Defined quantum circuit for transform {transform_idx}, theta={theta:.2f}")
         except Exception as e:
             logging.error(f"Failed to define quantum circuit: {e}")
@@ -964,11 +961,8 @@ class PAQJPCompressor:
                 transformed[i] ^= fib_value
         return bytes(transformed)
 
-
     def generate_transform_method(self, n):
-        """Generate transform and reverse transform for n >= 16, same as PAQJP_6.5 with Qiskit circuit definition."""
-        # Define quantum circuit for inspiration (not executed)
-        self.create_quantum_transform_circuit(n, 1048576)  # Example data length for logging
+        self.create_quantum_transform_circuit(n, 1048576)
         def transform(data, repeat=100):
             if not data:
                 logging.warning(f"transform_{n}: Empty input, returning empty bytes")
@@ -976,18 +970,16 @@ class PAQJPCompressor:
             if isinstance(data, str):
                 data = data.encode('utf-8')
             transformed = bytearray(data)
-            seed_idx = n % len(self.seed_tables)  # Same as PAQJP_6.5
+            seed_idx = n % len(self.seed_tables)
             seed_value = self.get_seed(seed_idx, len(data))
             logging.info(f"transform_{n}: Using seed {seed_value} for seed_idx {seed_idx}")
             for i in range(len(transformed)):
                 transformed[i] ^= seed_value
             return bytes(transformed)
-
         def reverse_transform(data, repeat=100):
             if isinstance(data, str):
                 data = data.encode('utf-8')
             return transform(data, repeat)
-
         return transform, reverse_transform
 
     def compress_with_best_method(self, data, filetype, input_filename, mode="slow"):
@@ -1015,7 +1007,6 @@ class PAQJPCompressor:
             (8, self.transform_08),
             (9, self.transform_09),
             (12, self.transform_12),
-            
         ]
         slow_transformations = fast_transformations + [
             (10, self.transform_10),
@@ -1032,7 +1023,6 @@ class PAQJPCompressor:
                 (8, self.transform_08),
                 (9, self.transform_09),
                 (12, self.transform_12),
-                
             ]
             if is_dna:
                 prioritized = [(0, self.transform_genomecompress)] + prioritized
@@ -1101,7 +1091,6 @@ class PAQJPCompressor:
             9: self.reverse_transform_09,
             10: self.reverse_transform_10,
             12: self.reverse_transform_12,
-            
         }
         reverse_transforms.update({i: self.generate_transform_method(i)[1] for i in range(16, 256)})
 
