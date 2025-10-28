@@ -47,7 +47,7 @@ MEM = 1 << 15
 MIN_BITS = 2
 
 # === AUTO-DOWNLOAD DICTIONARIES (100% RELIABLE) ===
-DICTIONARY_URL = "https://drive.google.com/uc?export=download&id=1cPGyuwtozYjFVZd2wBmJvKWa7Xoy0Y-A"
+DICTIONARY_URL = "https://drive.google.com/file/d/1hbzas7MvooFzGRpC_2Mat3Jr8_zw7PRH/view?usp=drivesdk"
 DICTIONARY_EXTRACTED: List[str] = []
 _MAX_RETRIES = 3
 
