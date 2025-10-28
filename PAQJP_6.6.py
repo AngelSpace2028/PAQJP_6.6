@@ -126,24 +126,23 @@ def load_pi_digits(filename: str = PI_DIGITS_FILE, expected_count: int = 3) -> O
 def generate_pi_digits(num_digits: int = 3, filename: str = PI_DIGITS_FILE) -> List[int]:
     try:
         from mpmath import mp
-        mp.dps = 20  # Sufficient precision for small num_digits
-        pi_str = str(mp.pi)
-        raw_digits = [int(d) for d in pi_str[2:2 + num_digits]]
-        if len(raw_digits) != num_digits:
-            logging.error(f"Generated {len(raw_digits)} digits, expected {num_digits}")
+        mp.dps = num_digits
+        pi_digits = [int(d) for d in mp.pi.digits(10)[0]]
+        if len(pi_digits) != num_digits:
+            logging.error(f"Generated {len(pi_digits)} digits, expected {num_digits}")
             raise ValueError("Incorrect number of pi digits generated")
-        mapped_digits = [(d * 255 // 9) % 256 for d in raw_digits]
+        mapped_digits = [(d * 255 // 9) % 256 for d in pi_digits]
         save_pi_digits(mapped_digits, filename)
         return mapped_digits
     except ImportError:
         logging.warning("mpmath not installed, using fallback pi digits")
-        fallback_digits = [1, 4, 1]
+        fallback_digits = [3, 1, 4]
         mapped_fallback = [(d * 255 // 9) % 256 for d in fallback_digits[:num_digits]]
         save_pi_digits(mapped_fallback, filename)
         return mapped_fallback
     except Exception as e:
         logging.error(f"Failed to generate pi digits: {e}")
-        fallback_digits = [1, 4, 1]
+        fallback_digits = [3, 1, 4]
         mapped_fallback = [(d * 255 // 9) % 256 for d in fallback_digits[:num_digits]]
         save_pi_digits(mapped_fallback, filename)
         return mapped_fallback
@@ -274,8 +273,6 @@ class StateTable:
 # === Smart Compressor ===
 class SmartCompressor:
     def __init__(self):
-        if not any(os.path.exists(f) for f in DICTIONARY_FILES):
-            download_dictionaries()
         self.dictionaries = self.load_dictionaries()
 
     def load_dictionaries(self):
@@ -283,15 +280,9 @@ class SmartCompressor:
         for filename in DICTIONARY_FILES:
             if os.path.exists(filename):
                 try:
-                    if filename.endswith('.bin'):
-                        with open(filename, "rb") as f:
-                            bin_data = f.read()
-                        data.append(binascii.hexlify(bin_data).decode('ascii'))
-                        logging.info(f"Loaded binary dictionary as hex: {filename}")
-                    else:
-                        with open(filename, "r", encoding="utf-8", errors="ignore") as f:
-                            data.append(f.read())
-                        logging.info(f"Loaded text dictionary: {filename}")
+                    with open(filename, "r", encoding="utf-8", errors="ignore") as f:
+                        data.append(f.read())
+                    logging.info(f"Loaded dictionary: {filename}")
                 except Exception as e:
                     logging.warning(f"Could not read {filename}: {e}")
             else:
@@ -299,13 +290,9 @@ class SmartCompressor:
         return data
 
     def compute_sha256(self, data):
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         return hashlib.sha256(data).hexdigest()
 
     def compute_sha256_binary(self, data):
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         return hashlib.sha256(data).digest()
 
     def find_hash_in_dictionaries(self, hash_hex):
@@ -313,27 +300,17 @@ class SmartCompressor:
             if not os.path.exists(filename):
                 continue
             try:
-                if filename.endswith('.bin'):
-                    with open(filename, "rb") as f:
-                        bin_data = f.read()
-                    hex_content = binascii.hexlify(bin_data).decode('ascii')
-                    if hash_hex in hex_content:
-                        logging.info(f"Hash {hash_hex[:16]}... found in {filename}")
-                        return filename
-                else:
-                    with open(filename, "r", encoding="utf-8", errors="ignore") as f:
-                        for line in f:
-                            if hash_hex in line:
-                                logging.info(f"Hash {hash_hex[:16]}... found in {filename}")
-                                return filename
+                with open(filename, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if hash_hex in line:
+                            logging.info(f"Hash {hash_hex[:16]}... found in {filename}")
+                            return filename
             except Exception as e:
                 logging.warning(f"Error searching {filename}: {e}")
         return None
 
     def generate_8byte_sha(self, data):
         try:
-            if isinstance(data, str):
-                data = data.encode('utf-8')
             return hashlib.sha256(data).digest()[:8]
         except Exception as e:
             logging.error(f"Failed to generate SHA: {e}")
@@ -346,8 +323,6 @@ class SmartCompressor:
         try:
             if isinstance(data, bytearray):
                 data = bytes(data)
-            elif isinstance(data, str):
-                data = data.encode('utf-8')
             elif not isinstance(data, bytes):
                 raise TypeError(f"Expected bytes or bytearray, got {type(data)}")
             compressed = paq.compress(data)
@@ -371,25 +346,18 @@ class SmartCompressor:
 
     def reversible_transform(self, data):
         logging.info("Applying XOR transform (0xAA)")
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytes(b ^ 0xAA for b in data)
         logging.info("XOR transform complete")
         return transformed
 
     def reverse_reversible_transform(self, data):
         logging.info("Reversing XOR transform (0xAA)")
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         return self.reversible_transform(data)
 
     def compress(self, input_data, input_file):
         if not input_data:
             logging.warning("Empty input, returning minimal output")
             return bytes([0])
-
-        if isinstance(input_data, str):
-            input_data = input_data.encode('utf-8')
 
         original_hash = self.compute_sha256(input_data)
         logging.info(f"SHA-256 of input: {original_hash[:16]}...")
@@ -470,27 +438,22 @@ class PAQJPCompressor:
             return self.seed_tables[table_idx][value % len(self.seed_tables[table_idx])]
         return 0
 
-    def create_quantum_transform_circuit(self, transform_idx: int, data_length: int):
+    def create_quantum_transform_circuit(self, transform_idx: int, data_length: int) -> qiskit.QuantumCircuit:
         """Define a 9-qubit quantum circuit for quantum-inspired transform (not executed)."""
-        if qiskit is None:
-            logging.warning("qiskit not available, skipping quantum circuit definition")
-            return
-        try:
-            circuit = qiskit.QuantumCircuit(9)  # 9 qubits, no QuantumRegister
-            # Apply Hadamard to all qubits for superposition
-            for i in range(9):
-                circuit.h(i)
-            # Apply rotation based on transform_idx and data_length
-            theta = (transform_idx * data_length) % 512 / 512 * math.pi
-            for i in range(9):
-                circuit.ry(theta, i)
-            # Add entanglement with CNOT gates
-            for i in range(8):
-                circuit.cx(i, i + 1)
-            # Circuit is not executed; used for quantum-inspired design
-            logging.info(f"Defined quantum circuit for transform {transform_idx}, theta={theta:.2f}")
-        except Exception as e:
-            logging.error(f"Failed to define quantum circuit: {e}")
+        circuit = qiskit.QuantumCircuit(9)  # 9 qubits, no QuantumRegister
+        # Apply Hadamard to all qubits for superposition
+        for i in range(9):
+            circuit.h(i)
+        # Apply rotation based on transform_idx and data_length
+        theta = (transform_idx * data_length) % 512 / 512 * math.pi
+        for i in range(9):
+            circuit.ry(theta, i)
+        # Add entanglement with CNOT gates
+        for i in range(8):
+            circuit.cx(i, i + 1)
+        # Circuit is not executed; used for quantum-inspired design
+        logging.info(f"Defined quantum circuit for transform {transform_idx}, theta={theta:.2f}")
+        return circuit
 
     def calculate_frequencies(self, binary_str):
         if not binary_str:
@@ -568,8 +531,6 @@ class PAQJPCompressor:
         try:
             if isinstance(data, bytearray):
                 data = bytes(data)
-            elif isinstance(data, str):
-                data = data.encode('utf-8')
             elif not isinstance(data, bytes):
                 raise TypeError(f"Expected bytes or bytearray, got {type(data)}")
             compressed = paq.compress(data)
@@ -656,34 +617,24 @@ class PAQJPCompressor:
         if not data:
             logging.warning("transform_01: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         return transform_with_prime_xor_every_3_bytes(data, repeat=repeat)
 
     def reverse_transform_01(self, data, repeat=100):
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         return self.transform_01(data, repeat=repeat)
 
     def transform_03(self, data):
         if not data:
             logging.warning("transform_03: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         return transform_with_pattern_chunk(data)
 
     def reverse_transform_03(self, data):
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         return self.transform_03(data)
 
     def transform_04(self, data, repeat=100):
         if not data:
             logging.warning("transform_04: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         for _ in range(repeat):
             for i in range(len(transformed)):
@@ -694,8 +645,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("reverse_transform_04: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         for _ in range(repeat):
             for i in range(len(transformed)):
@@ -706,8 +655,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("transform_05: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         for i in range(len(transformed)):
             transformed[i] = ((transformed[i] << shift) | (transformed[i] >> (8 - shift))) & 0xFF
@@ -717,8 +664,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("reverse_transform_05: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         for i in range(len(transformed)):
             transformed[i] = ((transformed[i] >> shift) | (transformed[i] << (8 - shift))) & 0xFF
@@ -728,8 +673,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("transform_06: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         random.seed(seed)
         substitution = list(range(256))
         random.shuffle(substitution)
@@ -742,8 +685,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("reverse_transform_06: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         random.seed(seed)
         substitution = list(range(256))
         random.shuffle(substitution)
@@ -759,8 +700,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("transform_07: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         pi_length = len(self.PI_DIGITS)
         data_size_kb = len(data) / 1024
@@ -781,8 +720,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("reverse_transform_07: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         pi_length = len(self.PI_DIGITS)
         data_size_kb = len(data) / 1024
@@ -803,8 +740,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("transform_08: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         pi_length = len(self.PI_DIGITS)
         data_size_kb = len(data) / 1024
@@ -825,8 +760,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("reverse_transform_08: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         pi_length = len(self.PI_DIGITS)
         data_size_kb = len(data) / 1024
@@ -847,8 +780,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("transform_09: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         pi_length = len(self.PI_DIGITS)
         data_size_kb = len(data) / 1024
@@ -871,8 +802,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("reverse_transform_09: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         pi_length = len(self.PI_DIGITS)
         data_size_kb = len(data) / 1024
@@ -895,8 +824,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("transform_10: Empty input, returning empty bytes with n=0")
             return bytes([0])
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         data_size_kb = len(data) / 1024
         cycles = min(10, max(1, int(data_size_kb)))
@@ -918,8 +845,6 @@ class PAQJPCompressor:
         if len(data) < 1:
             logging.warning("reverse_transform_10: Data too short, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         n = data[0]
         transformed = bytearray(data[1:])
         data_size_kb = len(data) / 1024
@@ -934,8 +859,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("transform_12: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         data_size = len(data)
         fib_length = len(self.fibonacci)
@@ -951,8 +874,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("reverse_transform_12: Empty input, returning empty bytes")
             return b''
-        if isinstance(data, str):
-            data = data.encode('utf-8')
         transformed = bytearray(data)
         data_size = len(data)
         fib_length = len(self.fibonacci)
@@ -973,8 +894,6 @@ class PAQJPCompressor:
             if not data:
                 logging.warning(f"transform_{n}: Empty input, returning empty bytes")
                 return b''
-            if isinstance(data, str):
-                data = data.encode('utf-8')
             transformed = bytearray(data)
             seed_idx = n % len(self.seed_tables)  # Same as PAQJP_6.5
             seed_value = self.get_seed(seed_idx, len(data))
@@ -984,8 +903,6 @@ class PAQJPCompressor:
             return bytes(transformed)
 
         def reverse_transform(data, repeat=100):
-            if isinstance(data, str):
-                data = data.encode('utf-8')
             return transform(data, repeat)
 
         return transform, reverse_transform
@@ -994,9 +911,6 @@ class PAQJPCompressor:
         if not data:
             logging.warning("compress_with_best_method: Empty input, returning minimal marker")
             return bytes([0])
-
-        if isinstance(data, str):
-            data = data.encode('utf-8')
 
         is_dna = False
         try:
@@ -1276,3 +1190,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
