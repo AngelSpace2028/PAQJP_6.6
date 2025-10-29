@@ -29,6 +29,20 @@ PRIMES = [p for p in range(2, 256) if all(p % d != 0 for d in range(2, int(p**0.
 MEM = 1 << 15
 MIN_BITS = 2
 
+# === Dictionary Files ===
+DICTIONARY_FILES = [
+    "words_enwik8.txt", "eng_news_2005_1M-sentences.txt", "eng_news_2005_1M-words.txt",
+    "eng_news_2005_1M-sources.txt", "eng_news_2005_1M-co_n.txt",
+    "eng_news_2005_1M-co_s.txt", "eng_news_2005_1M-inv_so.txt",
+    "eng_news_2005_1M-meta.txt", "Dictionary.txt",
+    "the-complete-reference-html-css-fifth-edition.txt", "francais.txt", "espanol.txt",
+    "deutsch.txt", "ukenglish.txt", "vertebrate-palaeontology-dict.txt", "dictionary.2.bin", 
+    "dictionary.1.bin", "dictionary.3.bin", "dictionary.4.bin", "dictionary.6.bin", 
+    "dictionary.7.bin", "dictionary.8.bin", "dictionary.9.bin", "dictionary.11.bin", 
+    "dictionary.12.bin", "dictionary.13.bin", "dictionary.14.bin", "dictionary.15.bin",
+    "dictionary.16.bin", "dictionary.19.bin",  "dictionary.20.bin"
+]
+
 # === DNA Encoding Table ===
 DNA_ENCODING_TABLE = {
     'AAAA': 0b00000, 'AAAC': 0b00001, 'AAAG': 0b00010, 'AAAT': 0b00011,
@@ -268,7 +282,12 @@ class SmartCompressor:
                 logging.warning(f"Error searching {filename}: {e}")
         return None
 
-    # REMOVED: generate_8byte_sha
+    def generate_8byte_sha(self, data):
+        try:
+            return hashlib.sha256(data).digest()[:8]
+        except Exception as e:
+            logging.error(f"Failed to generate SHA: {e}")
+            return None
 
     def paq_compress(self, data):
         if not data:
@@ -322,8 +341,13 @@ class SmartCompressor:
         else:
             logging.info("Hash not found, proceeding with compression")
 
-        # REMOVED: .paq special-case that used generate_8byte_sha
-        # (the original code returned an 8-byte SHA for .paq files – we now skip that path)
+        if input_file.endswith(".paq") and any(x in input_file for x in ["words", "lines", "sentence"]):
+            sha = self.generate_8byte_sha(input_data)
+            if sha and len(input_data) > 8:
+                logging.info(f"SHA-8 for .paq file: {sha.hex()}")
+                return sha
+            logging.info("Original smaller than SHA, skipping compression")
+            return None
 
         transformed = self.reversible_transform(input_data)
         compressed = self.paq_compress(transformed)
@@ -834,6 +858,7 @@ class PAQJPCompressor:
                 transformed[i] ^= fib_value
         return bytes(transformed)
 
+
     def generate_transform_method(self, n):
         """Generate transform and reverse transform for n >= 16, same as PAQJP_6.5 with Qiskit circuit definition."""
         # Define quantum circuit for inspiration (not executed)
@@ -969,7 +994,7 @@ class PAQJPCompressor:
 
         if method_marker == 4:
             binary_str = bin(int(binascii.hexlify(compressed_data), 16))[2:].zfill(len(compressed_data) * 8)
-            decompressed_binary =ed_binary = self.decompress_data_huffman(binary_str)
+            decompressed_binary = self.decompress_data_huffman(binary_str)
             if not decompressed_binary:
                 logging.warning("Huffman decompression empty")
                 return b'', None
