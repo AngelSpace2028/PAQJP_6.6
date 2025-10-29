@@ -30,18 +30,8 @@ MEM = 1 << 15
 MIN_BITS = 2
 
 # === Dictionary Files ===
-DICTIONARY_FILES = [
-    "words_enwik8.txt", "eng_news_2005_1M-sentences.txt", "eng_news_2005_1M-words.txt",
-    "eng_news_2005_1M-sources.txt", "eng_news_2005_1M-co_n.txt",
-    "eng_news_2005_1M-co_s.txt", "eng_news_2005_1M-inv_so.txt",
-    "eng_news_2005_1M-meta.txt", "Dictionary.txt",
-    "the-complete-reference-html-css-fifth-edition.txt", "francais.txt", "espanol.txt",
-    "deutsch.txt", "ukenglish.txt", "vertebrate-palaeontology-dict.txt", "dictionary.2.bin", 
-    "dictionary.1.bin", "dictionary.3.bin", "dictionary.4.bin", "dictionary.6.bin", 
-    "dictionary.7.bin", "dictionary.8.bin", "dictionary.9.bin", "dictionary.11.bin", 
-    "dictionary.12.bin", "dictionary.13.bin", "dictionary.14.bin", "dictionary.15.bin",
-    "dictionary.16.bin", "dictionary.19.bin",  "dictionary.20.bin"
-]
+DICTIONARY_FILES = []
+
 
 # === DNA Encoding Table ===
 DNA_ENCODING_TABLE = {
