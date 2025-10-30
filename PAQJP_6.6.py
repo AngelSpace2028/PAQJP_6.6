@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
 import sys
 import math
@@ -40,6 +43,66 @@ PRIMES = [p for p in range(2, 256) if all(p % d != 0 for d in range(2, int(p**0.
 MEM = 1 << 15
 MIN_BITS = 2
 
+# ----------------------------------------------------------------------
+# 1. PSEUDORANDOM π DIGITS (10 000 digits, deterministic)
+# ----------------------------------------------------------------------
+def generate_pi_digits(num_digits: int = 10000, filename: str = PI_DIGITS_FILE) -> List[int]:
+    """
+    Generate *num_digits* pseudorandom digits that mimic the distribution of π.
+    The generator is deterministic (seed = 0xDEADBEEF) so every run produces the
+    same sequence – perfect for reproducible compression.
+    """
+    random.seed(0xDEADBEEF)                     # fixed seed → reproducible
+    # π digits are roughly uniform 0-9; we generate uniform ints and map 0-255
+    pseudo = [random.randint(0, 9) for _ in range(num_digits)]
+    mapped = [(d * 255 // 9) % 256 for d in pseudo]
+    save_pi_digits(mapped, filename)
+    return mapped
+
+def save_pi_digits(digits: List[int], filename: str = PI_DIGITS_FILE) -> bool:
+    try:
+        with open(filename, 'w') as f:
+            f.write(','.join(str(d) for d in digits))
+        logging.info(f"Saved {len(digits)} pi digits to {filename}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to save pi digits to {filename}: {e}")
+        return False
+
+def load_pi_digits(filename: str = PI_DIGITS_FILE, expected_count: int = 10000) -> Optional[List[int]]:
+    try:
+        if not os.path.isfile(filename):
+            logging.warning(f"Pi digits file {filename} does not exist")
+            return None
+        with open(filename, 'r') as f:
+            data = f.read().strip()
+            if not data:
+                logging.warning(f"Pi digits file {filename} is empty")
+                return None
+            digits = [int(x) for x in data.split(',') if x.isdigit() and 0 <= int(x) <= 255]
+            if len(digits) != expected_count:
+                logging.warning(f"Loaded {len(digits)} digits, expected {expected_count}")
+                return None
+            logging.info(f"Loaded {len(digits)} pi digits from {filename}")
+            return digits
+    except Exception as e:
+        logging.error(f"Failed to load pi digits from {filename}: {e}")
+        return None
+
+# Try to load a previously saved table; if missing → generate a fresh one
+PI_DIGITS = load_pi_digits() or generate_pi_digits()
+
+# ----------------------------------------------------------------------
+# 2. BIG FIBONACCI TABLE (1 000 000 terms)
+# ----------------------------------------------------------------------
+def generate_fibonacci(n: int = 1_000_000) -> List[int]:
+    """Return the first *n* Fibonacci numbers (mod 256 for XOR use)."""
+    fib = [0, 1]
+    for i in range(2, n):
+        fib.append((fib[i-1] + fib[i-2]) % 256)   # keep values in byte range
+    return fib
+
+# ----------------------------------------------------------------------
 # === DNA Encoding Table ===
 DNA_ENCODING_TABLE = {
     'AAAA': 0b00000, 'AAAC': 0b00001, 'AAAG': 0b00010, 'AAAT': 0b00011,
@@ -52,75 +115,6 @@ DNA_ENCODING_TABLE = {
     'A': 0b11100, 'C': 0b11101, 'G': 0b11110, 'T': 0b11111
 }
 DNA_DECODING_TABLE = {v: k for k, v in DNA_ENCODING_TABLE.items()}
-
-# === Pi Digits Functions ===
-def save_pi_digits(digits: List[int], filename: str = PI_DIGITS_FILE) -> bool:
-    try:
-        with open(filename, 'w') as f:
-            f.write(','.join(str(d) for d in digits))
-        logging.info(f"Saved {len(digits)} pi digits to {filename}")
-        return True
-    except Exception as e:
-        logging.error(f"Failed to save pi digits to {filename}: {e}")
-        return False
-
-
-def load_pi_digits(filename: str = PI_DIGITS_FILE, expected_count: int = 3) -> Optional[List[int]]:
-    try:
-        if not os.path.isfile(filename):
-            logging.warning(f"Pi digits file {filename} does not exist")
-            return None
-        with open(filename, 'r') as f:
-            data = f.read().strip()
-            if not data:
-                logging.warning(f"Pi digits file {filename} is empty")
-                return None
-            digits = []
-            for x in data.split(','):
-                if not x.isdigit():
-                    logging.warning(f"Invalid integer in {filename}: {x}")
-                    return None
-                d = int(x)
-                if not (0 <= d <= 255):
-                    logging.warning(f"Digit out of range in {filename}: {d}")
-                    return None
-                digits.append(d)
-            if len(digits) != expected_count:
-                logging.warning(f"Loaded {len(digits)} digits, expected {expected_count}")
-                return None
-            logging.info(f"Loaded {len(digits)} pi digits from {filename}")
-            return digits
-    except Exception as e:
-        logging.error(f"Failed to load pi digits from {filename}: {e}")
-        return None
-
-
-def generate_pi_digits(num_digits: int = 3, filename: str = PI_DIGITS_FILE) -> List[int]:
-    try:
-        from mpmath import mp
-        mp.dps = num_digits
-        pi_digits = [int(d) for d in mp.pi.digits(10)[0]]
-        if len(pi_digits) != num_digits:
-            logging.error(f"Generated {len(pi_digits)} digits, expected {num_digits}")
-            raise ValueError("Incorrect number of pi digits generated")
-        mapped_digits = [(d * 255 // 9) % 256 for d in pi_digits]
-        save_pi_digits(mapped_digits, filename)
-        return mapped_digits
-    except ImportError:
-        logging.warning("mpmath not installed, using fallback pi digits")
-        fallback_digits = [3, 1, 4]
-        mapped_fallback = [(d * 255 // 9) % 256 for d in fallback_digits[:num_digits]]
-        save_pi_digits(mapped_fallback, filename)
-        return mapped_fallback
-    except Exception as e:
-        logging.error(f"Failed to generate pi digits: {e}")
-        fallback_digits = [3, 1, 4]
-        mapped_fallback = [(d * 255 // 9) % 256 for d in fallback_digits[:num_digits]]
-        save_pi_digits(mapped_fallback, filename)
-        return mapped_fallback
-
-
-PI_DIGITS = generate_pi_digits(3)
 
 # === Helper Classes and Functions ===
 class Filetype(Enum):
@@ -259,15 +253,12 @@ class PAQJPCompressor:
         self.SQUARE_OF_ROOT = 2
         self.ADD_NUMBERS = 1
         self.MULTIPLY = 3
-        self.fibonacci = self.generate_fibonacci(100)
+        self.fibonacci = generate_fibonacci()          # <-- 1 000 000 terms
         self.state_table = StateTable()
 
-    def generate_fibonacci(self, n: int) -> List[int]:
-        fib = [0, 1]
-        for i in range(2, n):
-            fib.append(fib[i-1] + fib[i-2])
-        return fib
-
+    # ------------------------------------------------------------------
+    # Seed tables (unchanged)
+    # ------------------------------------------------------------------
     def generate_seed_tables(self, num_tables=126, table_size=256, min_val=5, max_val=255, seed=42):
         random.seed(seed)
         return [[random.randint(min_val, max_val) for _ in range(table_size)] for _ in range(num_tables)]
@@ -277,6 +268,9 @@ class PAQJPCompressor:
             return self.seed_tables[table_idx][value % len(self.seed_tables[table_idx])]
         return 0
 
+    # ------------------------------------------------------------------
+    # Quantum-inspired placeholder (unchanged)
+    # ------------------------------------------------------------------
     def create_quantum_transform_circuit(self, transform_idx: int, data_length: int) -> Optional['qiskit.QuantumCircuit']:
         if qiskit is None:
             return None
@@ -291,6 +285,9 @@ class PAQJPCompressor:
         logging.info(f"Defined quantum circuit for transform {transform_idx}, theta={theta:.2f}")
         return circuit
 
+    # ------------------------------------------------------------------
+    # Huffman helpers (unchanged)
+    # ------------------------------------------------------------------
     def calculate_frequencies(self, binary_str):
         if not binary_str:
             return {}
@@ -355,6 +352,9 @@ class PAQJPCompressor:
                 current_code = ""
         return decompressed_str
 
+    # ------------------------------------------------------------------
+    # PAQ wrappers (unchanged)
+    # ------------------------------------------------------------------
     def paq_compress(self, data):
         if not data or paq is None:
             return None
@@ -381,6 +381,9 @@ class PAQJPCompressor:
             logging.error(f"PAQ9a decompression failed: {e}")
             return None
 
+    # ------------------------------------------------------------------
+    # DNA genome transform (unchanged)
+    # ------------------------------------------------------------------
     def transform_genomecompress(self, data: bytes) -> bytes:
         if not data:
             return b''
@@ -432,6 +435,10 @@ class PAQJPCompressor:
             i += 5
         return ''.join(output).encode('ascii')
 
+    # ------------------------------------------------------------------
+    # All the numbered transforms (01-12) – unchanged except they now use
+    # the bigger PI_DIGITS and fibonacci tables.
+    # ------------------------------------------------------------------
     def transform_01(self, data, repeat=100):
         return transform_with_prime_xor_every_3_bytes(data, repeat=repeat)
 
@@ -654,6 +661,9 @@ class PAQJPCompressor:
     def reverse_transform_12(self, data, repeat=100):
         return self.transform_12(data, repeat=repeat)
 
+    # ------------------------------------------------------------------
+    # Dynamic transform generator (unchanged)
+    # ------------------------------------------------------------------
     def generate_transform_method(self, n):
         self.create_quantum_transform_circuit(n, 1048576)
         def transform(data, repeat=100):
@@ -667,6 +677,9 @@ class PAQJPCompressor:
             return bytes(transformed)
         return transform, transform
 
+    # ------------------------------------------------------------------
+    # Core compression / decompression selection
+    # ------------------------------------------------------------------
     def compress_with_best_method(self, data, filetype, input_filename, mode="slow"):
         if not data:
             return bytes([0])
@@ -774,6 +787,9 @@ class PAQJPCompressor:
             logging.error(f"Decompression failed: {e}")
             return b'', None
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
     def compress(self, input_file: str, output_file: str, filetype: Filetype = Filetype.DEFAULT, mode: str = "slow") -> bool:
         try:
             with open(input_file, 'rb') as f:
@@ -807,6 +823,9 @@ class PAQJPCompressor:
             return False
 
 
+# ----------------------------------------------------------------------
+# File-type detection (unchanged)
+# ----------------------------------------------------------------------
 def detect_filetype(filename: str) -> Filetype:
     _, ext = os.path.splitext(filename.lower())
     if ext in ['.jpg', '.jpeg']:
@@ -823,6 +842,9 @@ def detect_filetype(filename: str) -> Filetype:
     return Filetype.DEFAULT
 
 
+# ----------------------------------------------------------------------
+# CLI
+# ----------------------------------------------------------------------
 def main():
     print("PAQJP_6.6 Compression System (Dictionary-Free)")
     print("Created by Jurijus Pacalovas")
