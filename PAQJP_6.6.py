@@ -582,83 +582,59 @@ class PAQJPCompressor:
     def transform_13(self, data):
         if not data:
             return b''
-        # Compute r deterministically
-        r = (len(data) % 65535) + 1
-        # Apply simple reversible transform r times: XOR with position index
+        # Use 1-byte header: r = 1 to 255
+        r = (len(data) % 255) + 1
         transformed = bytearray(data)
         for _ in range(r):
             for i in range(len(transformed)):
                 transformed[i] ^= (i % 256)
-        # Now, bias bit compress: variable length encoding based on value size
+        # Variable-length bit packing
         bit_codes = []
         for b in transformed:
-            if b < 4:  # 00 prefix, 2 value bits (total 4 bits)
-                prefix = 0b00
-                num_bits = 2
-            elif b < 16:  # 01 prefix, 4 value bits (total 6 bits)
-                prefix = 0b01
-                num_bits = 4
-            else:  # 10 prefix, 8 value bits (total 10 bits)
-                prefix = 0b10
-                num_bits = 8
-            prefix_bits = format(prefix, '02b')
-            value_bits = format(b, f'0{num_bits}b')
-            bit_codes.append(prefix_bits + value_bits)
+            if b < 4:
+                prefix, bits = 0b00, 2
+            elif b < 16:
+                prefix, bits = 0b01, 4
+            else:
+                prefix, bits = 0b10, 8
+            bit_codes.append(format(prefix, '02b') + format(b, f'0{bits}b'))
         all_bits = ''.join(bit_codes)
-        # Pack to bytes
-        if all_bits:
-            byte_length = (len(all_bits) + 7) // 8
-            packed = int(all_bits, 2).to_bytes(byte_length, 'big')
-        else:
-            packed = b''
-        # Prepend r as 2 bytes little-endian
-        header = struct.pack('<H', r)
-        return header + packed
+        packed = int(all_bits, 2).to_bytes((len(all_bits) + 7) // 8, 'big') if all_bits else b''
+        return struct.pack('B', r) + packed
 
     def reverse_transform_13(self, data):
-        if len(data) < 2:
+        if len(data) < 1:
             return b''
-        # Read r
-        r = struct.unpack('<H', data[:2])[0]
-        packed = data[2:]
-        # Unpack bits
+        r = data[0]
+        packed = data[1:]
         if not packed:
             return b''
         bit_str = bin(int.from_bytes(packed, 'big'))[2:].zfill(len(packed) * 8)
-        # Decode bytes
-        decoded_bytes = []
+        decoded = []
         i = 0
-        while i < len(bit_str):
-            if i + 2 > len(bit_str):
-                break
-            prefix_bits = bit_str[i:i+2]
-            prefix = int(prefix_bits, 2)
-            if prefix == 0b00:
-                num_bits = 2
-            elif prefix == 0b01:
-                num_bits = 4
-            elif prefix == 0b10:
-                num_bits = 8
-            else:
-                # Invalid prefix, stop
-                break
+        while i + 2 <= len(bit_str):
+            prefix = int(bit_str[i:i+2], 2)
             i += 2
-            if i + num_bits > len(bit_str):
+            if prefix == 0b00:
+                bits = 2
+            elif prefix == 0b01:
+                bits = 4
+            elif prefix == 0b10:
+                bits = 8
+            else:
                 break
-            value_bits = bit_str[i:i + num_bits]
-            v = int(value_bits, 2)
+            if i + bits > len(bit_str):
+                break
+            v = int(bit_str[i:i+bits], 2)
             if v > 255:
-                # Invalid, stop
                 break
-            decoded_bytes.append(v)
-            i += num_bits
-        bit_compressed_data = bytes(decoded_bytes)
-        # Reverse the r XORs
-        rev_transformed = bytearray(bit_compressed_data)
+            decoded.append(v)
+            i += bits
+        rev = bytearray(decoded)
         for _ in range(r):
-            for j in range(len(rev_transformed)):
-                rev_transformed[j] ^= (j % 256)
-        return bytes(rev_transformed)
+            for j in range(len(rev)):
+                rev[j] ^= (j % 256)
+        return bytes(rev)
 
     def generate_transform_method(self, n):
         self.create_quantum_transform_circuit(n, 1048576)
