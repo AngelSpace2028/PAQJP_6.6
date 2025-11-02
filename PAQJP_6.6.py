@@ -34,7 +34,6 @@ logging.basicConfig(
 
 # === Constants ===
 PROGNAME = "PAQJP_6.6"  # Updated version
-HUFFMAN_THRESHOLD = 1024
 PI_DIGITS_FILE = "pi_digits.txt"
 PRIMES = [p for p in range(2, 256) if all(p % d != 0 for d in range(2, int(p**0.5)+1))]
 MEM = 1 << 15
@@ -99,7 +98,7 @@ def generate_pi_digits(num_digits: int = 3, filename: str = PI_DIGITS_FILE) -> L
     try:
         from mpmath import mp
         mp.dps = num_digits
-        pi_digits = [int(d) for d in mp.pi.digits(10)[0]]
+        pi_digits = [int(d) for d in str(mp.pi)[2:2+num_digits]]
         if len(pi_digits) != num_digits:
             logging.error(f"Generated {len(pi_digits)} digits, expected {num_digits}")
             raise ValueError("Incorrect number of pi digits generated")
@@ -127,16 +126,6 @@ class Filetype(Enum):
     DEFAULT = 0
     JPEG = 1
     TEXT = 3
-
-
-class Node:
-    def __init__(self, left=None, right=None, symbol=None):
-        self.left = left
-        self.right = right
-        self.symbol = symbol
-
-    def is_leaf(self):
-        return self.left is None and self.right is None
 
 
 def transform_with_prime_xor_every_3_bytes(data, repeat=100):
@@ -290,70 +279,6 @@ class PAQJPCompressor:
             circuit.cx(i, i + 1)
         logging.info(f"Defined quantum circuit for transform {transform_idx}, theta={theta:.2f}")
         return circuit
-
-    def calculate_frequencies(self, binary_str):
-        if not binary_str:
-            return {}
-        frequencies = {}
-        for bit in binary_str:
-            frequencies[bit] = frequencies.get(bit, 0) + 1
-        return frequencies
-
-    def build_huffman_tree(self, frequencies):
-        if not frequencies:
-            return None
-        heap = [(freq, Node(symbol=symbol)) for symbol, freq in frequencies.items()]
-        heapq.heapify(heap)
-        while len(heap) > 1:
-            freq1, node1 = heapq.heappop(heap)
-            freq2, node2 = heapq.heappop(heap)
-            new_node = Node(left=node1, right=node2)
-            heapq.heappush(heap, (freq1 + freq2, new_node))
-        return heap[0][1]
-
-    def generate_huffman_codes(self, root, current_code="", codes={}):
-        if root is None:
-            return {}
-        if root.is_leaf():
-            codes[root.symbol] = current_code or "0"
-            return codes
-        if root.left:
-            self.generate_huffman_codes(root.left, current_code + "0", codes)
-        if root.right:
-            self.generate_huffman_codes(root.right, current_code + "1", codes)
-        return codes
-
-    def compress_data_huffman(self, binary_str):
-        if not binary_str:
-            return ""
-        frequencies = self.calculate_frequencies(binary_str)
-        huffman_tree = self.build_huffman_tree(frequencies)
-        if huffman_tree is None:
-            return ""
-        huffman_codes = self.generate_huffman_codes(huffman_tree)
-        if '0' not in huffman_codes:
-            huffman_codes['0'] = '0'
-        if '1' not in huffman_codes:
-            huffman_codes['1'] = '1'
-        return ''.join(huffman_codes[bit] for bit in binary_str)
-
-    def decompress_data_huffman(self, compressed_str):
-        if not compressed_str:
-            return ""
-        frequencies = self.calculate_frequencies(compressed_str)
-        huffman_tree = self.build_huffman_tree(frequencies)
-        if huffman_tree is None:
-            return ""
-        huffman_codes = self.generate_huffman_codes(huffman_tree)
-        reversed_codes = {code: symbol for symbol, code in huffman_codes.items()}
-        decompressed_str = ""
-        current_code = ""
-        for bit in compressed_str:
-            current_code += bit
-            if current_code in reversed_codes:
-                decompressed_str += reversed_codes[current_code]
-                current_code = ""
-        return decompressed_str
 
     def paq_compress(self, data):
         if not data or paq is None:
@@ -718,14 +643,6 @@ class PAQJPCompressor:
                 except Exception as e:
                     logging.warning(f"Compression failed with transform {marker}: {e}")
 
-        if len(data) < HUFFMAN_THRESHOLD:
-            binary_str = bin(int(binascii.hexlify(data), 16))[2:].zfill(len(data) * 8)
-            compressed_huffman = self.compress_data_huffman(binary_str)
-            compressed_bytes = int(compressed_huffman, 2).to_bytes((len(compressed_huffman) + 7) // 8, 'big') if compressed_huffman else b''
-            if compressed_bytes and len(compressed_bytes) < best_size:
-                best_compressed = compressed_bytes
-                best_marker = 4
-
         if best_compressed is None:
             return bytes([0]) + data
 
@@ -747,19 +664,6 @@ class PAQJPCompressor:
             10: self.reverse_transform_10, 12: self.reverse_transform_12,
         }
         reverse_transforms.update({i: self.generate_transform_method(i)[1] for i in range(16, 256)})
-
-        if method_marker == 4:
-            binary_str = bin(int(binascii.hexlify(compressed_data), 16))[2:].zfill(len(compressed_data) * 8)
-            decompressed_binary = self.decompress_data_huffman(binary_str)
-            try:
-                num_bytes = (len(decompressed_binary) + 7) // 8
-                hex_str = "%0*x" % (num_bytes * 2, int(decompressed_binary, 2))
-                if len(hex_str) % 2 != 0:
-                    hex_str = '0' + hex_str
-                return binascii.unhexlify(hex_str), None
-            except Exception as e:
-                logging.error(f"Huffman conversion failed: {e}")
-                return b'', None
 
         if method_marker not in reverse_transforms:
             return b'', None
